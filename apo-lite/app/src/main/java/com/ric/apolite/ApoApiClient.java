@@ -12,7 +12,10 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 public final class ApoApiClient {
     public interface Callback {
@@ -32,22 +35,41 @@ public final class ApoApiClient {
         return bearerToken;
     }
 
-    public void login(String nik, String pin, Callback callback) {
+    public void login(String nik, String pin, String otp, boolean isValidate, boolean isGpsActive, Callback callback) {
         try {
-            JSONObject body = new JSONObject();
-            body.put("nik", nik);
-            body.put("pin", pin);
-            request("POST", "v1/auth/login", body.toString(), false, callback);
+            Map<String, String> fields = new LinkedHashMap<>();
+            fields.put("nik", nik);
+            fields.put("pin", pin);
+            fields.put("otp", otp);
+            fields.put("isValidate", String.valueOf(isValidate));
+            fields.put("isGPSActive", String.valueOf(isGpsActive));
+            requestForm("POST", "v1/auth/login", fields, false, callback);
         } catch (Exception e) {
-            callback.onError(-1, e.getMessage() == null ? "JSON error" : e.getMessage());
+            callback.onError(-1, e.getMessage() == null ? "form error" : e.getMessage());
         }
     }
 
     public void activeShipments(Callback callback) {
-        request("GET", "v1/receipt-revamp/apo-online-active-shipment", null, true, callback);
+        request("GET", "v1/receipt-revamp/apo-online-active-shipment", null, null, true, callback);
     }
 
-    private void request(String method, String path, String json, boolean auth, Callback callback) {
+    private void requestForm(String method, String path, Map<String, String> fields, boolean auth, Callback callback) {
+        StringBuilder form = new StringBuilder();
+        try {
+            for (Map.Entry<String, String> entry : fields.entrySet()) {
+                if (form.length() > 0) form.append('&');
+                form.append(URLEncoder.encode(entry.getKey(), "UTF-8"));
+                form.append('=');
+                form.append(URLEncoder.encode(entry.getValue() == null ? "" : entry.getValue(), "UTF-8"));
+            }
+        } catch (Exception e) {
+            callback.onError(-1, "Tidak dapat membentuk request login");
+            return;
+        }
+        request(method, path, form.toString(), "application/x-www-form-urlencoded; charset=utf-8", auth, callback);
+    }
+
+    private void request(String method, String path, String bodyPayload, String contentType, boolean auth, Callback callback) {
         new Thread(() -> {
             HttpURLConnection conn = null;
             try {
@@ -57,13 +79,13 @@ public final class ApoApiClient {
                 conn.setConnectTimeout(15000);
                 conn.setReadTimeout(20000);
                 conn.setRequestProperty("Accept", "application/json");
-                conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+                if (contentType != null) conn.setRequestProperty("Content-Type", contentType);
                 if (auth && bearerToken != null && !bearerToken.isEmpty()) {
                     conn.setRequestProperty("Authorization", "Bearer " + bearerToken);
                 }
-                if (json != null) {
+                if (bodyPayload != null) {
                     conn.setDoOutput(true);
-                    byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+                    byte[] bytes = bodyPayload.getBytes(StandardCharsets.UTF_8);
                     conn.setFixedLengthStreamingMode(bytes.length);
                     try (OutputStream out = conn.getOutputStream()) {
                         out.write(bytes);
@@ -104,6 +126,48 @@ public final class ApoApiClient {
         } catch (Exception ignored) {
             return null;
         }
+    }
+
+    public static String findErrorEvent(String body) {
+        return findString(body, "event");
+    }
+
+    public static String findErrorMessage(String body) {
+        String value = findString(body, "message");
+        return value == null ? "" : value;
+    }
+
+    private static String findString(String body, String wantedKey) {
+        try {
+            Object root = body.trim().startsWith("[") ? new JSONArray(body) : new JSONObject(body);
+            return findStringValue(root, wantedKey);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static String findStringValue(Object node, String wantedKey) throws Exception {
+        if (node instanceof JSONObject) {
+            JSONObject o = (JSONObject) node;
+            if (o.has(wantedKey) && !o.isNull(wantedKey)) {
+                String v = o.optString(wantedKey, "");
+                if (!v.isEmpty()) return v;
+            }
+            JSONArray names = o.names();
+            if (names != null) {
+                for (int i = 0; i < names.length(); i++) {
+                    String found = findStringValue(o.opt(names.getString(i)), wantedKey);
+                    if (found != null) return found;
+                }
+            }
+        } else if (node instanceof JSONArray) {
+            JSONArray a = (JSONArray) node;
+            for (int i = 0; i < a.length(); i++) {
+                String found = findStringValue(a.opt(i), wantedKey);
+                if (found != null) return found;
+            }
+        }
+        return null;
     }
 
     private static String findTokenValue(Object node) throws Exception {
