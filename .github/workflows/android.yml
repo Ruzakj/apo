@@ -46,7 +46,6 @@ jobs:
           set -euo pipefail
           APKTOOL_URL=$(curl -fsSL https://api.github.com/repos/iBotPeaches/Apktool/releases/latest \
             | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(a["browser_download_url"] for a in d["assets"] if a["name"].endswith(".jar")))')
-          echo "Downloading $APKTOOL_URL"
           curl -fL "$APKTOOL_URL" -o apktool.jar
           java -jar apktool.jar --version
 
@@ -57,12 +56,12 @@ jobs:
           test -f apo-decoded/apktool.yml
           test -f apo-decoded/AndroidManifest.xml
 
-      - name: Apply optional repository patches
+      - name: Apply QA patches
         shell: bash
         run: |
           set -euo pipefail
-          if [ -x scripts/apply-patches.sh ]; then
-            scripts/apply-patches.sh "$GITHUB_WORKSPACE/apo-decoded"
+          if [ -f scripts/apply-patches.sh ]; then
+            bash scripts/apply-patches.sh "$GITHUB_WORKSPACE/apo-decoded"
           else
             echo "No patch script present; baseline rebuild only."
           fi
@@ -71,49 +70,31 @@ jobs:
         run: |
           java -jar apktool.jar b apo-decoded -o APO-4.9.0-rebuilt-unsigned.apk
           test -s APO-4.9.0-rebuilt-unsigned.apk
-          ls -lh APO-4.9.0-rebuilt-unsigned.apk
 
       - name: Zipalign APK
         run: |
-          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -f -p 4 \
-            APO-4.9.0-rebuilt-unsigned.apk \
-            APO-4.9.0-rebuilt-aligned.apk
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -f -p 4 APO-4.9.0-rebuilt-unsigned.apk APO-4.9.0-rebuilt-aligned.apk
           "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -v 4 APO-4.9.0-rebuilt-aligned.apk
 
       - name: Create CI signing key
         run: |
-          keytool -genkeypair -noprompt \
-            -keystore apo-ci.jks \
-            -storepass android \
-            -keypass android \
-            -alias apo-ci \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -dname "CN=APO CI,O=Ruzakj,C=ID"
+          keytool -genkeypair -noprompt -keystore apo-ci.jks -storepass android -keypass android -alias apo-ci -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=APO CI,O=Ruzakj,C=ID"
 
       - name: Sign rebuilt APK
         run: |
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign \
-            --ks apo-ci.jks \
-            --ks-key-alias apo-ci \
-            --ks-pass pass:android \
-            --key-pass pass:android \
-            --out APO-4.9.0-rebuilt.apk \
-            APO-4.9.0-rebuilt-aligned.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign --ks apo-ci.jks --ks-key-alias apo-ci --ks-pass pass:android --key-pass pass:android --out APO-4.9.0-QA.apk APO-4.9.0-rebuilt-aligned.apk
 
       - name: Verify signed APK
         run: |
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs APO-4.9.0-rebuilt.apk
-          ls -lh APO-4.9.0-rebuilt.apk
-          sha256sum APO-4.9.0-rebuilt.apk > APO-4.9.0-rebuilt.apk.sha256
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs APO-4.9.0-QA.apk
+          sha256sum APO-4.9.0-QA.apk > APO-4.9.0-QA.apk.sha256
 
-      - name: Upload rebuilt APK
+      - name: Upload QA APK
         uses: actions/upload-artifact@v4
         with:
-          name: APO-4.9.0-original-rebuild
+          name: APO-4.9.0-QA-location-test
           path: |
-            APO-4.9.0-rebuilt.apk
-            APO-4.9.0-rebuilt.apk.sha256
+            APO-4.9.0-QA.apk
+            APO-4.9.0-QA.apk.sha256
           if-no-files-found: error
           retention-days: 14
