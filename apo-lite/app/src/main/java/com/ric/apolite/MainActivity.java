@@ -80,18 +80,19 @@ public class MainActivity extends Activity {
         root.addView(pass);
         TextView status = text("Siap terhubung ke APO gateway.", 12);
         root.addView(status);
-        Button login = button("Masuk", v -> {
+        final Button[] loginRef = new Button[1];
+        loginRef[0] = button("Masuk", v -> {
             String nik = user.getText().toString().trim();
             String pin = pass.getText().toString().trim();
             if (nik.isEmpty() || pin.isEmpty()) {
                 Toast.makeText(this, "Isi NIK dan PIN", Toast.LENGTH_SHORT).show();
                 return;
             }
-            login.setEnabled(false);
+            loginRef[0].setEnabled(false);
             status.setText("Menghubungkan...");
             api.login(nik, pin, new ApoApiClient.Callback() {
                 @Override public void onSuccess(String body) {
-                    login.setEnabled(true);
+                    loginRef[0].setEnabled(true);
                     String token = ApoApiClient.findToken(body);
                     if (token == null || token.isEmpty()) {
                         status.setText("Login mendapat respons, tetapi token belum dikenali. Kontrak auth perlu dipetakan lagi.");
@@ -103,12 +104,12 @@ public class MainActivity extends Activity {
                 }
 
                 @Override public void onError(int code, String message) {
-                    login.setEnabled(true);
+                    loginRef[0].setEnabled(true);
                     status.setText("Login gagal (" + code + "). " + compact(message));
                 }
             });
         });
-        root.addView(login);
+        root.addView(loginRef[0]);
         root.addView(text("APO Lite tidak menyimpan PIN. Token hanya berada di memori proses aplikasi pada build ini.", 12));
     }
 
