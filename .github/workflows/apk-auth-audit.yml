@@ -1,0 +1,76 @@
+name: Audit APO Auth Flow
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/apk-auth-audit.yml'
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Download JADX
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL=$(curl -fsSL https://api.github.com/repos/skylot/jadx/releases/latest \
+            | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(a["browser_download_url"] for a in d["assets"] if a["name"].startswith("jadx-") and a["name"].endswith(".zip")))')
+          curl -fL "$URL" -o jadx.zip
+          unzip -q jadx.zip -d jadx
+          chmod +x jadx/bin/jadx
+          jadx/bin/jadx --version
+
+      - name: Decompile auth-related code
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f apo-4-9-0.apk
+          rm -rf jadx-out auth-audit
+          mkdir -p auth-audit
+          jadx/bin/jadx -j 2 --show-bad-code --no-res -d jadx-out apo-4-9-0.apk || true
+
+          grep -RIlE 'AUTH_SSO_OTP|OTPChanged|AuthDataRequestModel|/v1/auth/login|/v2/auth/token|refreshToken|isOTPError' jadx-out/sources 2>/dev/null \
+            | sort -u > auth-audit/matches.txt || true
+
+          while IFS= read -r f; do
+            [ -f "$f" ] || continue
+            rel=${f#jadx-out/sources/}
+            mkdir -p "auth-audit/source/$(dirname "$rel")"
+            cp "$f" "auth-audit/source/$rel"
+          done < auth-audit/matches.txt
+
+          grep -RniE 'AUTH_SSO_OTP|OTPChanged|AuthDataRequestModel|/v1/auth/login|/v2/auth/token|refreshToken|isOTPError|otp[), =:]' \
+            auth-audit/source > auth-audit/auth-context.txt || true
+
+          cat > auth-audit/README.txt <<'EOF'
+Sanitized static decompilation report for APO 4.9.0 authentication flow.
+Scope: request/response DTOs, endpoint declarations, OTP state handling, token exchange.
+No runtime credentials, private app storage, user tokens, QR/TOTP seeds, or bypass logic are collected.
+EOF
+
+          echo '--- matched files ---'
+          cat auth-audit/matches.txt || true
+          echo '--- auth context ---'
+          head -400 auth-audit/auth-context.txt || true
+
+      - name: Upload auth audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: APO-auth-audit
+          path: auth-audit/
+          if-no-files-found: error
+          retention-days: 7
