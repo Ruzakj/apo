@@ -3,7 +3,9 @@ package com.ric.apolite;
 import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Color;
+import android.location.LocationManager;
 import android.os.Bundle;
+import android.provider.Settings;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
@@ -19,6 +21,7 @@ import org.json.JSONObject;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 public class MainActivity extends Activity {
     private static final String APO_PACKAGE = "com.alfamart.apo";
@@ -73,46 +76,134 @@ public class MainActivity extends Activity {
 
     private void showLogin() {
         screen("APO Lite");
-        root.addView(text("Pesanan • Packing • Siap Kirim • Konfirmasi • Chat", 14));
+        root.addView(text("Login APO: NIK • PIN • Google Authenticator", 14));
+
         EditText user = input("NIK");
         EditText pass = input("PIN");
+        EditText otp = input("Kode Google Authenticator 6 digit");
         pass.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
+        otp.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
+
         root.addView(user);
         root.addView(pass);
-        TextView status = text("Siap terhubung ke APO gateway.", 12);
+        root.addView(otp);
+
+        TextView status = text("Masukkan kode 6 digit yang sedang tampil di Google Authenticator.", 12);
         root.addView(status);
+
         final Button[] loginRef = new Button[1];
         loginRef[0] = button("Masuk", v -> {
-            String nik = user.getText().toString().trim();
+            String nik = sanitizeNik(user.getText().toString());
             String pin = pass.getText().toString().trim();
-            if (nik.isEmpty() || pin.isEmpty()) {
-                Toast.makeText(this, "Isi NIK dan PIN", Toast.LENGTH_SHORT).show();
+            String otpCode = otp.getText().toString().trim();
+
+            String validation = validateLogin(nik, pin, otpCode);
+            if (validation != null) {
+                status.setText(validation);
                 return;
             }
+
+            boolean gpsActive = isGpsActive();
             loginRef[0].setEnabled(false);
-            status.setText("Menghubungkan...");
-            api.login(nik, pin, new ApoApiClient.Callback() {
+            status.setText("Memvalidasi NIK, PIN, OTP, dan status GPS...");
+
+            api.login(nik, pin, otpCode, false, gpsActive, new ApoApiClient.Callback() {
                 @Override public void onSuccess(String body) {
                     loginRef[0].setEnabled(true);
                     String token = ApoApiClient.findToken(body);
                     if (token == null || token.isEmpty()) {
-                        status.setText("Respons login diterima, tetapi format token belum cocok. Gunakan tombol Buka APO Asli untuk workflow produksi.");
+                        String event = ApoApiClient.findErrorEvent(body);
+                        String msg = ApoApiClient.findErrorMessage(body);
+                        status.setText(formatAuthMessage(200, event, msg, "Respons login tidak berisi token sesi APO."));
                         return;
                     }
                     api.setBearerToken(token);
-                    Toast.makeText(MainActivity.this, "Login berhasil", Toast.LENGTH_SHORT).show();
+                    pass.setText("");
+                    otp.setText("");
+                    Toast.makeText(MainActivity.this, "Login APO berhasil", Toast.LENGTH_SHORT).show();
                     loadOrders();
                 }
 
                 @Override public void onError(int code, String message) {
                     loginRef[0].setEnabled(true);
-                    status.setText("Login Lite gagal (" + code + "). " + compact(message));
+                    String event = ApoApiClient.findErrorEvent(message);
+                    String msg = ApoApiClient.findErrorMessage(message);
+                    status.setText(formatAuthMessage(code, event, msg, compact(message)));
                 }
             });
         });
+
         root.addView(loginRef[0]);
+        root.addView(button("Buka Google Authenticator", v -> openGoogleAuthenticator()));
         root.addView(button("Buka APO Asli", v -> openOriginalApo("login / produksi")));
-        root.addView(text("PIN tidak disimpan. Token Lite hanya berada di memori proses aplikasi.", 12));
+        root.addView(text("APO Lite tidak menyimpan PIN, OTP, QR, atau seed Authenticator. Token sesi hanya berada di memori proses aplikasi.", 12));
+    }
+
+    private static String sanitizeNik(String value) {
+        StringBuilder out = new StringBuilder();
+        String source = value == null ? "" : value;
+        for (int i = 0; i < source.length(); i++) {
+            char c = source.charAt(i);
+            if (Character.isLetterOrDigit(c)) out.append(c);
+        }
+        return out.toString().toUpperCase(Locale.ROOT);
+    }
+
+    private static String validateLogin(String nik, String pin, String otp) {
+        if (nik.isEmpty() && pin.isEmpty()) return "Masukkan NIK dan PIN Anda.";
+        if (nik.length() < 8 || !nik.matches("^[a-zA-Z0-9]+$")) return "NIK minimal 8 karakter dan hanya huruf/angka.";
+        if (pin.length() < 6) return "PIN minimal 6 digit.";
+        if (otp.length() < 6) return "Masukkan kode Google Authenticator 6 digit.";
+        if (!otp.matches("^[0-9]+$")) return "Kode Authenticator harus berupa angka.";
+        return null;
+    }
+
+    private boolean isGpsActive() {
+        try {
+            Object service = getSystemService(LOCATION_SERVICE);
+            LocationManager lm = service instanceof LocationManager ? (LocationManager) service : null;
+            boolean provider = lm != null && lm.isProviderEnabled(LocationManager.GPS_PROVIDER);
+            boolean mode = Settings.Secure.getInt(getContentResolver(), Settings.Secure.LOCATION_MODE) != Settings.Secure.LOCATION_MODE_OFF;
+            return provider && mode;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private static String formatAuthMessage(int code, String event, String message, String fallback) {
+        String e = event == null ? "" : event.trim();
+        String m = message == null ? "" : message.trim();
+        if ("AUTH_SSO_OTP_NOT_VALID".equals(e)) return "Kode Google Authenticator tidak valid. Gunakan kode 6 digit terbaru.";
+        if ("AUTH_SSO_OTP_TOO_LONG".equals(e)) return "Kode Google Authenticator terlalu panjang.";
+        if ("AUTH_SSO_OTP_MAX_NOT_VALID".equals(e)) return "Batas percobaan OTP tercapai. Ikuti instruksi APO sebelum mencoba kembali.";
+        if ("AUTH_SSO_PIN_NOT_VALID".equals(e)) return "PIN tidak valid.";
+        if ("AUTH_SSO_PIN_BLOCKED".equals(e)) return "PIN sedang diblokir oleh server APO.";
+        if ("AUTH_SSO_PIN_EXPIRED".equals(e)) return "PIN telah kedaluwarsa.";
+        if ("AUTH_SSO_NIK_NOT_VALID".equals(e) || "AUTH_NOT_FOUND".equals(e)) return "NIK tidak valid atau akun tidak ditemukan.";
+        if ("AUTH_SSO_NIK_BLOCKED".equals(e)) return "NIK sedang diblokir oleh server APO.";
+        if ("AUTH_SSO_NOT_MATCH".equals(e)) return "NIK, PIN, atau OTP tidak cocok.";
+        if ("GPS_NOT_ACTIVE".equals(e)) return "GPS harus aktif untuk login APO.";
+        if ("GPLAY_VALIDATION_FAILED".equals(e)) return "Validasi Google Play perangkat gagal. Gunakan APO asli jika perangkat memerlukan validasi tambahan.";
+        if ("SESSION_EXIST".equals(e)) return m.isEmpty() ? "Masih ada sesi APO aktif." : m;
+        if (!m.isEmpty()) return m;
+        return "Login gagal (" + code + "). " + (fallback == null ? "" : fallback);
+    }
+
+    private void openGoogleAuthenticator() {
+        String[] packages = {
+                "com.google.android.apps.authenticator2",
+                "com.google.android.apps.authenticator"
+        };
+        for (String pkg : packages) {
+            try {
+                Intent launch = getPackageManager().getLaunchIntentForPackage(pkg);
+                if (launch != null) {
+                    startActivity(launch);
+                    return;
+                }
+            } catch (Exception ignored) { }
+        }
+        Toast.makeText(this, "Google Authenticator tidak ditemukan. Buka aplikasi Authenticator secara manual.", Toast.LENGTH_LONG).show();
     }
 
     private void loadOrders() {
