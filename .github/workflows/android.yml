@@ -1,19 +1,32 @@
-name: Android Debug APK
+name: Rebuild Original APO APK
 
 on:
   push:
     branches: [ main ]
-  pull_request:
+    paths:
+      - 'apo-4-9-0.apk'
+      - 'patches/**'
+      - 'scripts/**'
+      - '.github/workflows/android.yml'
   workflow_dispatch:
 
 jobs:
-  build:
+  rebuild:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
+
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Verify original APK
+        run: |
+          test -f apo-4-9-0.apk
+          ls -lh apo-4-9-0.apk
+          sha256sum apo-4-9-0.apk
+          unzip -t apo-4-9-0.apk >/dev/null
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -24,20 +37,83 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK packages
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: Install Android build tools
+        run: sdkmanager "build-tools;35.0.0"
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.9'
+      - name: Download latest Apktool
+        shell: bash
+        run: |
+          set -euo pipefail
+          APKTOOL_URL=$(curl -fsSL https://api.github.com/repos/iBotPeaches/Apktool/releases/latest \
+            | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(a["browser_download_url"] for a in d["assets"] if a["name"].endswith(".jar")))')
+          echo "Downloading $APKTOOL_URL"
+          curl -fL "$APKTOOL_URL" -o apktool.jar
+          java -jar apktool.jar --version
 
-      - name: Build debug APK
-        run: gradle --no-daemon assembleDebug
+      - name: Decode original APO
+        run: |
+          rm -rf apo-decoded
+          java -jar apktool.jar d -f apo-4-9-0.apk -o apo-decoded
+          test -f apo-decoded/apktool.yml
+          test -f apo-decoded/AndroidManifest.xml
 
-      - name: Upload APK
+      - name: Apply optional repository patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -x scripts/apply-patches.sh ]; then
+            scripts/apply-patches.sh "$GITHUB_WORKSPACE/apo-decoded"
+          else
+            echo "No patch script present; baseline rebuild only."
+          fi
+
+      - name: Rebuild decoded APK
+        run: |
+          java -jar apktool.jar b apo-decoded -o APO-4.9.0-rebuilt-unsigned.apk
+          test -s APO-4.9.0-rebuilt-unsigned.apk
+          ls -lh APO-4.9.0-rebuilt-unsigned.apk
+
+      - name: Zipalign APK
+        run: |
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -f -p 4 \
+            APO-4.9.0-rebuilt-unsigned.apk \
+            APO-4.9.0-rebuilt-aligned.apk
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -v 4 APO-4.9.0-rebuilt-aligned.apk
+
+      - name: Create CI signing key
+        run: |
+          keytool -genkeypair -noprompt \
+            -keystore apo-ci.jks \
+            -storepass android \
+            -keypass android \
+            -alias apo-ci \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=APO CI,O=Ruzakj,C=ID"
+
+      - name: Sign rebuilt APK
+        run: |
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign \
+            --ks apo-ci.jks \
+            --ks-key-alias apo-ci \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --out APO-4.9.0-rebuilt.apk \
+            APO-4.9.0-rebuilt-aligned.apk
+
+      - name: Verify signed APK
+        run: |
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs APO-4.9.0-rebuilt.apk
+          ls -lh APO-4.9.0-rebuilt.apk
+          sha256sum APO-4.9.0-rebuilt.apk > APO-4.9.0-rebuilt.apk.sha256
+
+      - name: Upload rebuilt APK
         uses: actions/upload-artifact@v4
         with:
-          name: apo-location-qa-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: APO-4.9.0-original-rebuild
+          path: |
+            APO-4.9.0-rebuilt.apk
+            APO-4.9.0-rebuilt.apk.sha256
           if-no-files-found: error
+          retention-days: 14
