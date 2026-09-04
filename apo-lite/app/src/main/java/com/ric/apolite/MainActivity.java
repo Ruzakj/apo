@@ -1,6 +1,7 @@
 package com.ric.apolite;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.text.InputType;
@@ -20,8 +21,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class MainActivity extends Activity {
+    private static final String APO_PACKAGE = "com.alfamart.apo";
     private LinearLayout root;
-    private TextView title;
     private final ApoApiClient api = new ApoApiClient();
     private final List<OrderItem> orders = new ArrayList<>();
     private String orderStatus = "NEW";
@@ -63,7 +64,7 @@ public class MainActivity extends Activity {
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(32, 32, 32, 40);
-        title = text(name, 24);
+        TextView title = text(name, 24);
         title.setGravity(Gravity.START);
         root.addView(title);
         scroll.addView(root);
@@ -72,7 +73,7 @@ public class MainActivity extends Activity {
 
     private void showLogin() {
         screen("APO Lite");
-        root.addView(text("Minimal operational client", 14));
+        root.addView(text("Pesanan • Packing • Siap Kirim • Konfirmasi • Chat", 14));
         EditText user = input("NIK");
         EditText pass = input("PIN");
         pass.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
@@ -95,7 +96,7 @@ public class MainActivity extends Activity {
                     loginRef[0].setEnabled(true);
                     String token = ApoApiClient.findToken(body);
                     if (token == null || token.isEmpty()) {
-                        status.setText("Login mendapat respons, tetapi token belum dikenali. Kontrak auth perlu dipetakan lagi.");
+                        status.setText("Respons login diterima, tetapi format token belum cocok. Gunakan tombol Buka APO Asli untuk workflow produksi.");
                         return;
                     }
                     api.setBearerToken(token);
@@ -105,12 +106,13 @@ public class MainActivity extends Activity {
 
                 @Override public void onError(int code, String message) {
                     loginRef[0].setEnabled(true);
-                    status.setText("Login gagal (" + code + "). " + compact(message));
+                    status.setText("Login Lite gagal (" + code + "). " + compact(message));
                 }
             });
         });
         root.addView(loginRef[0]);
-        root.addView(text("APO Lite tidak menyimpan PIN. Token hanya berada di memori proses aplikasi pada build ini.", 12));
+        root.addView(button("Buka APO Asli", v -> openOriginalApo("login / produksi")));
+        root.addView(text("PIN tidak disimpan. Token Lite hanya berada di memori proses aplikasi.", 12));
     }
 
     private void loadOrders() {
@@ -125,8 +127,9 @@ public class MainActivity extends Activity {
             }
 
             @Override public void onError(int code, String message) {
-                status.setText("Gagal memuat pesanan (" + code + "). " + compact(message));
+                status.setText("Gagal memuat pesanan Lite (" + code + "). " + compact(message));
                 root.addView(button("Coba lagi", v -> loadOrders()));
+                root.addView(button("Buka Pesanan di APO Asli", v -> openOriginalApo("pesanan")));
                 root.addView(button("Keluar", v -> { api.setBearerToken(null); showLogin(); }));
             }
         });
@@ -134,7 +137,7 @@ public class MainActivity extends Activity {
 
     private void showOrders() {
         screen("Pesanan");
-        root.addView(text("Packing → Siap Kirim → Konfirmasi", 14));
+        root.addView(text("Workflow: Packing → Siap Kirim → Konfirmasi", 14));
         if (orders.isEmpty()) {
             root.addView(text("Tidak ada shipment aktif yang terbaca dari respons server.", 14));
         } else {
@@ -147,7 +150,8 @@ public class MainActivity extends Activity {
             }
         }
         root.addView(button("Refresh", v -> loadOrders()));
-        root.addView(button("Chat", v -> showChat()));
+        root.addView(button("Chat Teks", v -> showChat()));
+        root.addView(button("Buka APO Asli", v -> openOriginalApo("workflow produksi")));
         root.addView(button("Keluar", v -> { api.setBearerToken(null); orders.clear(); showLogin(); }));
     }
 
@@ -159,18 +163,11 @@ public class MainActivity extends Activity {
         if (selectedOrder != null && selectedOrder.customer != null && !selectedOrder.customer.isEmpty()) {
             root.addView(text("Customer: " + selectedOrder.customer, 14));
         }
-        root.addView(button("Packing", v -> {
-            orderStatus = "PACKING_LOCAL";
-            Toast.makeText(this, "UI Packing siap. Endpoint write belum diaktifkan sampai kontraknya terverifikasi.", Toast.LENGTH_LONG).show();
-            showOrderDetail();
-        }));
-        root.addView(button("Siap Kirim", v -> {
-            orderStatus = "READY_TO_SHIP_LOCAL";
-            Toast.makeText(this, "UI Siap Kirim siap. Endpoint write belum diaktifkan sampai kontraknya terverifikasi.", Toast.LENGTH_LONG).show();
-            showOrderDetail();
-        }));
+        root.addView(text("Perubahan status produksi diteruskan ke APO asli agar autentikasi, lokasi, integritas, dan validasi server tetap berlaku.", 12));
+        root.addView(button("Packing", v -> openOriginalApo("Packing " + no)));
+        root.addView(button("Siap Kirim", v -> openOriginalApo("Siap Kirim " + no)));
         root.addView(button("Konfirmasi", v -> showConfirmation()));
-        root.addView(button("Chat Pesanan", v -> showChat()));
+        root.addView(button("Chat Teks", v -> showChat()));
         root.addView(button("Kembali", v -> showOrders()));
     }
 
@@ -178,14 +175,16 @@ public class MainActivity extends Activity {
         screen("Konfirmasi");
         String no = selectedOrder == null ? "-" : selectedOrder.number;
         root.addView(text("Shipment: " + no + "\nStatus saat ini: " + orderStatus, 15));
-        root.addView(text("Konfirmasi produksi belum dikirim dari Lite sampai endpoint dan payload resminya selesai dipetakan. Validasi server/lokasi tetap dipertahankan.", 14));
-        root.addView(button("Validasi UI", v -> Toast.makeText(this, "Flow UI konfirmasi OK", Toast.LENGTH_SHORT).show()));
+        root.addView(text("Konfirmasi produksi dilakukan oleh APO asli. APO Lite tidak menonaktifkan atau melewati validasi lokasi/integritas/server.", 14));
+        root.addView(button("Lanjut Konfirmasi di APO", v -> openOriginalApo("Konfirmasi " + no)));
         root.addView(button("Kembali", v -> showOrderDetail()));
     }
 
     private void showChat() {
-        screen("Chat");
-        TextView log = text("Pure text chat\n\n", 15);
+        screen("Chat Teks");
+        String no = selectedOrder == null ? "-" : selectedOrder.number;
+        root.addView(text("Shipment: " + no, 13));
+        TextView log = text("Mode chat Lite hanya teks.\n\n", 15);
         root.addView(log);
         EditText message = input("Tulis pesan...");
         root.addView(message);
@@ -194,10 +193,26 @@ public class MainActivity extends Activity {
             if (m.isEmpty()) return;
             log.setText(log.getText() + "Anda: " + m + "\n");
             message.setText("");
-            Toast.makeText(this, "Endpoint kirim chat belum diaktifkan sampai contract channel/message selesai dipetakan.", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Kontrak kirim chat belum terverifikasi; pesan belum dikirim ke server.", Toast.LENGTH_SHORT).show();
         }));
-        root.addView(text("Tanpa telepon, video, voice note, atau attachment.", 12));
+        root.addView(button("Buka Chat Produksi di APO", v -> openOriginalApo("chat " + no)));
+        root.addView(text("Tanpa telepon, video, voice note, atau attachment di APO Lite.", 12));
         root.addView(button("Kembali", v -> showOrders()));
+    }
+
+    private void openOriginalApo(String action) {
+        try {
+            Intent launch = getPackageManager().getLaunchIntentForPackage(APO_PACKAGE);
+            if (launch == null) {
+                Toast.makeText(this, "APO asli belum terpasang. Install com.alfamart.apo terlebih dahulu.", Toast.LENGTH_LONG).show();
+                return;
+            }
+            launch.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+            startActivity(launch);
+            Toast.makeText(this, "Dibuka di APO: " + action, Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            Toast.makeText(this, "Tidak dapat membuka APO asli: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
     }
 
     private static String compact(String message) {
@@ -208,8 +223,8 @@ public class MainActivity extends Activity {
 
     private static void collectOrders(String body, List<OrderItem> out) {
         try {
-            Object root = body.trim().startsWith("[") ? new JSONArray(body) : new JSONObject(body);
-            walk(root, out);
+            Object parsed = body.trim().startsWith("[") ? new JSONArray(body) : new JSONObject(body);
+            walk(parsed, out);
         } catch (Exception ignored) { }
     }
 
