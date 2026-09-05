@@ -59,7 +59,6 @@ jobs:
           java -jar apktool.jar d -f apo-4-9-0.apk -o decoded
           mkdir -p decoded/res/drawable-nodpi
           cp apo_home_bg.png decoded/res/drawable-nodpi/apo_home_bg.png
-
           python3 - <<'PY'
           import os
           from xml.etree import ElementTree as ET
@@ -70,46 +69,69 @@ jobs:
           tree=ET.parse(manifest)
           root=tree.getroot()
           app=root.find('application')
-          if app is None:
-              raise SystemExit('application element not found')
           launcher=None
-          for tag in ('activity','activity-alias'):
-              for node in app.findall(tag):
-                  for f in node.findall('intent-filter'):
-                      actions={x.get(a+'name','') for x in f.findall('action')}
-                      cats={x.get(a+'name','') for x in f.findall('category')}
-                      if 'android.intent.action.MAIN' in actions and 'android.intent.category.LAUNCHER' in cats:
-                          launcher=node
-                          break
-                  if launcher is not None:
+          for node in app.findall('activity'):
+              for f in node.findall('intent-filter'):
+                  actions={x.get(a+'name','') for x in f.findall('action')}
+                  cats={x.get(a+'name','') for x in f.findall('category')}
+                  if 'android.intent.action.MAIN' in actions and 'android.intent.category.LAUNCHER' in cats:
+                      launcher=node
                       break
               if launcher is not None:
                   break
           if launcher is None:
               raise SystemExit('launcher activity not found')
-          name=launcher.get(a+'name','')
           old_theme=launcher.get(a+'theme') or app.get(a+'theme') or ''
           launcher.set(a+'theme','@style/ApoHomeBackgroundTheme')
           tree.write(manifest, encoding='utf-8', xml_declaration=True)
-          values='decoded/res/values'
-          os.makedirs(values, exist_ok=True)
-          out=os.path.join(values,'apo_home_background_theme.xml')
           parent_attr=f' parent="{old_theme}"' if old_theme.startswith('@style/') else ''
-          xml=(
-              '<?xml version="1.0" encoding="utf-8"?>\n'
-              '<resources>\n'
+          os.makedirs('decoded/res/values',exist_ok=True)
+          open('decoded/res/values/apo_home_background_theme.xml','w',encoding='utf-8').write(
+              '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n'
               f'  <style name="ApoHomeBackgroundTheme"{parent_attr}>\n'
               '    <item name="android:windowBackground">@drawable/apo_home_bg</item>\n'
               '    <item name="android:windowIsTranslucent">false</item>\n'
               '    <item name="android:colorBackground">@android:color/transparent</item>\n'
-              '  </style>\n'
-              '</resources>\n'
-          )
-          open(out,'w',encoding='utf-8').write(xml)
+              '  </style>\n</resources>\n')
           open('stage-h-report.txt','w',encoding='utf-8').write(
-              f'Launcher activity: {name}\nOriginal theme: {old_theme or "(none)"}\nNew theme: @style/ApoHomeBackgroundTheme\nBackground: res/drawable-nodpi/apo_home_bg.png\n'
-          )
-          print(open('stage-h-report.txt').read())
+              f'Launcher activity: {launcher.get(a+"name")}\nOriginal theme: {old_theme}\nBackground: @drawable/apo_home_bg\n')
+          PY
+
+      - name: Sanitize generated drawable names
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          mapping={}
+          for root, dirs, files in os.walk('decoded/res'):
+              for fn in files:
+                  if '$' in fn:
+                      old=os.path.join(root,fn)
+                      new=os.path.join(root,fn.replace('$','z_'))
+                      if os.path.exists(new):
+                          raise SystemExit(f'collision: {new}')
+                      mapping[old]=new
+          for old,new in mapping.items():
+              os.rename(old,new)
+          repl={os.path.splitext(os.path.basename(o))[0]:os.path.splitext(os.path.basename(n))[0] for o,n in mapping.items()}
+          changed=0
+          for root, dirs, files in os.walk('decoded/res'):
+              for fn in files:
+                  if not fn.endswith('.xml'):
+                      continue
+                  p=os.path.join(root,fn)
+                  txt=open(p,encoding='utf-8',errors='ignore').read()
+                  orig=txt
+                  for a,b in repl.items():
+                      txt=txt.replace('@drawable/'+a,'@drawable/'+b)
+                      txt=txt.replace('@mipmap/'+a,'@mipmap/'+b)
+                  if txt != orig:
+                      open(p,'w',encoding='utf-8').write(txt)
+                      changed += 1
+          with open('stage-h-report.txt','a',encoding='utf-8') as f:
+              f.write(f'Sanitized drawable files: {len(mapping)}\nXML files updated: {changed}\n')
+          print(f'sanitized {len(mapping)} drawable files; updated {changed} XML files')
           PY
 
       - name: Rebuild with local AAPT2 and sign
@@ -119,7 +141,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -x "$AAPT2_LOCAL"
           java -jar apktool.jar b -a "$AAPT2_LOCAL" decoded -o APO-Stage-H-home-background-unsigned.apk
           "$BT/zipalign" -f -p 4 APO-Stage-H-home-background-unsigned.apk APO-Stage-H-home-background-aligned.apk
           keytool -genkeypair -keystore apo-stage-h.jks -storepass android -keypass android -alias apoh -keyalg RSA -keysize 2048 -validity 3650 -dname "CN=APO Stage H,O=Ruzakj,C=ID"
