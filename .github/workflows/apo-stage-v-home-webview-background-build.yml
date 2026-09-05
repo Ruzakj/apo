@@ -89,7 +89,7 @@ jobs:
               invoke-direct {v0, p0}, Lcom/ric/apopatch/HomeBackgroundInjector;-><init>(Landroid/webkit/WebView;)V
               const-wide/16 v1, 0x96
               invoke-virtual {p0, v0, v1, v2}, Landroid/webkit/WebView;->postDelayed(Ljava/lang/Runnable;J)Z
-              pop
+              move-result v3
           :done
               return-void
           .end method
@@ -109,7 +109,7 @@ jobs:
               if-lez v1, :done
               const-wide/16 v2, 0x1f4
               invoke-virtual {v0, p0, v2, v3}, Landroid/webkit/WebView;->postDelayed(Ljava/lang/Runnable;J)Z
-              pop
+              move-result v4
           :done
               return-void
           .end method
@@ -125,9 +125,6 @@ jobs:
               raise SystemExit(f'expected one il/ze.smali, got {candidates}')
           p=candidates[0]
           lines=open(p,encoding='utf-8').read().splitlines()
-
-          # Only patch method c(... WebView Home implementation ...). Find the unique
-          # WebView check-cast inside that method and inject one static helper call.
           method_start=None; method_end=None
           sig='.method public static final c(Lvc/r;Landroid/content/Context;Lcom/alfamart/apo/data/model/AuthDataPayloadResponseModel;Ljava/lang/String;Lcom/alfamart/apo/presentation/main/MainActivity;Ly6/b0;Li2/r;I)V'
           for i,l in enumerate(lines):
@@ -161,7 +158,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import os,re
+          import os
           mapping={}
           for root,_,files in os.walk('decoded/res'):
               for fn in files:
