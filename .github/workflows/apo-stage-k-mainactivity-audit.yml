@@ -1,0 +1,48 @@
+name: APO Stage K MainActivity Audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apo-stage-k-mainactivity-audit.yml'
+      - 'apo-4-9-0.apk'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install JADX
+        run: |
+          set -euo pipefail
+          curl -fL https://github.com/skylot/jadx/releases/download/v1.5.3/jadx-1.5.3.zip -o jadx.zip
+          unzip -q jadx.zip -d jadx
+          chmod +x jadx/bin/jadx
+      - name: Inspect MainActivity and nearby presentation code
+        run: |
+          set -euo pipefail
+          ./jadx/bin/jadx -d out --show-bad-code --deobf apo-4-9-0.apk >/tmp/jadx.log 2>&1 || true
+          MAIN=$(find out/sources/com/alfamart/apo/presentation/main -type f -name 'MainActivity.java' | head -n1)
+          test -n "$MAIN"
+          {
+            echo '=== MAIN ACTIVITY ==='
+            sed -n '1,1400p' "$MAIN"
+            echo
+            echo '=== FILES IN presentation/main ==='
+            find out/sources/com/alfamart/apo/presentation/main -maxdepth 2 -type f -print | sort
+            echo
+            echo '=== REFERENCES FROM MAIN ACTIVITY ==='
+            grep -oE 'com\.alfamart\.[A-Za-z0-9_.$]+' "$MAIN" | sort -u || true
+            echo
+            echo '=== setContent / Fragment / Nav / Compose references ==='
+            grep -RniE 'setContent|setContentView|NavHost|Fragment|ComposeView|navigation|bottom|home|beranda|dashboard' out/sources/com/alfamart/apo/presentation/main 2>/dev/null | head -n 1000 || true
+          } | tee stage-k-mainactivity.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: APO-Stage-K-mainactivity-audit
+          path: stage-k-mainactivity.txt
+          retention-days: 7
