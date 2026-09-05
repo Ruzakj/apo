@@ -1,0 +1,38 @@
+name: APO Stage K2 MainActivity Smali
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apo-stage-k2-mainactivity-smali.yml'
+      - 'apo-4-9-0.apk'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decode smali only
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq apktool
+          apktool d -f -r apo-4-9-0.apk -o decoded
+          MAIN=$(find decoded -type f -path '*/com/alfamart/apo/presentation/main/MainActivity.smali' | head -n1)
+          test -n "$MAIN"
+          {
+            echo "MAIN=$MAIN"
+            sed -n '1,2200p' "$MAIN"
+            echo
+            echo '=== MAIN PACKAGE FILES ==='
+            find "$(dirname "$MAIN")" -maxdepth 1 -type f -print | sort
+          } | tee mainactivity-smali.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: APO-Stage-K2-mainactivity-smali
+          path: mainactivity-smali.txt
+          retention-days: 7
