@@ -1,0 +1,188 @@
+name: APO Stage U Home WebView Background Build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apo-stage-u-home-webview-background-build.yml'
+      - 'apo-4-9-0.apk'
+      - 'background/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick curl
+          curl -fL https://github.com/iBotPeaches/Apktool/releases/download/v2.11.1/apktool_2.11.1.jar -o apktool.jar
+
+      - name: Locate Android build-tools
+        id: bt
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          BT=$(find "$SDK/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)
+          test -x "$BT/aapt2"
+          test -x "$BT/zipalign"
+          test -x "$BT/apksigner"
+          cp "$BT/aapt2" ./aapt2-local
+          chmod +x ./aapt2-local
+          echo "dir=$BT" >> "$GITHUB_OUTPUT"
+          echo "aapt2=$GITHUB_WORKSPACE/aapt2-local" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare inline Home background from repo image
+        shell: bash
+        run: |
+          set -euo pipefail
+          BG='background/file_000000007c6c8206af348f3652a79cd1.png'
+          test -f "$BG"
+          # Keep source aspect ratio; resize only for an inline WebView-safe data URI.
+          convert "$BG" -auto-orient -resize '360x>' -strip -quality 38 stage-u-home-bg.jpg
+          B64=$(base64 -w0 stage-u-home-bg.jpg)
+          echo "${#B64}" > stage-u-b64-length.txt
+          test "${#B64}" -lt 56000
+          printf '%s' "$B64" > stage-u-home-bg.b64
+          identify "$BG" | tee stage-u-report.txt
+          identify stage-u-home-bg.jpg | tee -a stage-u-report.txt
+          echo "Inline base64 chars: ${#B64}" | tee -a stage-u-report.txt
+
+      - name: Decode APK
+        run: |
+          set -euo pipefail
+          java -jar apktool.jar d -f apo-4-9-0.apk -o decoded
+
+      - name: Inject Home-only WebView CSS after page load
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os,re
+          b64=open('stage-u-home-bg.b64').read().strip()
+          js=("javascript:(function(){try{"
+              "var u=(location.href||'').toLowerCase();"
+              "if(u.indexOf('home')<0&&u.indexOf('beranda')<0)return;"
+              "var bg='data:image/jpeg;base64,"+b64+"';"
+              "var d=document.documentElement,b=document.body;"
+              "if(d){d.style.backgroundColor='transparent';}"
+              "if(b){b.style.backgroundImage='url(\"'+bg+'\")';"
+              "b.style.backgroundSize='cover';b.style.backgroundPosition='center top';"
+              "b.style.backgroundRepeat='no-repeat';b.style.backgroundAttachment='fixed';"
+              "b.style.backgroundColor='transparent';}"
+              "var r=document.querySelector('#root,#app,[data-reactroot]');"
+              "if(r){r.style.backgroundColor='transparent';}"
+              "}catch(e){}})()")
+          # Smali string must be escaped.
+          smali_js=js.replace('\\','\\\\').replace('"','\\"')
+          patched=[]
+          for root,_,files in os.walk('decoded'):
+              if '/smali' not in root: continue
+              for fn in files:
+                  if not fn.endswith('.smali'): continue
+                  p=os.path.join(root,fn)
+                  txt=open(p,encoding='utf-8',errors='ignore').read()
+                  if '.method public onPageFinished(Landroid/webkit/WebView;Ljava/lang/String;)V' not in txt:
+                      continue
+                  lines=txt.splitlines()
+                  out=[]; in_method=False; injected=False
+                  for idx,line in enumerate(lines):
+                      if line.startswith('.method public onPageFinished(Landroid/webkit/WebView;Ljava/lang/String;)V'):
+                          in_method=True
+                      if in_method and not injected and line.strip().startswith('.locals '):
+                          n=int(line.strip().split()[1],0)
+                          if n < 1:
+                              line=line.replace(str(n),'1',1)
+                      if in_method and line.strip()=='.end method' and not injected:
+                          # Inject immediately before method end. p1 is WebView, p2 is URL.
+                          out.append('    const-string v0, "'+smali_js+'"')
+                          out.append('    invoke-virtual {p1, v0, p0}, Landroid/webkit/WebView;->evaluateJavascript(Ljava/lang/String;Landroid/webkit/ValueCallback;)V')
+                          injected=True
+                          patched.append(p)
+                      out.append(line)
+                      if in_method and line.strip()=='.end method':
+                          in_method=False
+                  if injected:
+                      open(p,'w',encoding='utf-8').write('\n'.join(out)+'\n')
+          # Some WebViewClient classes may not implement ValueCallback; use null instead of p0.
+          # Rewrite our injected calls to pass null safely.
+          for p in patched:
+              t=open(p,encoding='utf-8').read()
+              t=t.replace('invoke-virtual {p1, v0, p0}, Landroid/webkit/WebView;->evaluateJavascript(Ljava/lang/String;Landroid/webkit/ValueCallback;)V',
+                          'const/4 v0, 0x0\n    invoke-virtual {p1, v1, v0}, Landroid/webkit/WebView;->evaluateJavascript(Ljava/lang/String;Landroid/webkit/ValueCallback;)V')
+              # Above rewrite needs two locals; repair robustly below.
+              t=t.replace('const-string v0, "javascript:', 'const-string v1, "javascript:')
+              t=re.sub(r'(?m)^\s*\.locals\s+([01])\s*$', lambda m: '    .locals 2', t)
+              open(p,'w',encoding='utf-8').write(t)
+          if not patched:
+              raise SystemExit('No WebViewClient.onPageFinished methods found')
+          with open('stage-u-report.txt','a') as f:
+              f.write(f'Patched onPageFinished methods: {len(patched)}\n')
+              for p in patched: f.write(p+'\n')
+          print('Patched:', len(patched))
+          PY
+
+      - name: Sanitize apktool dollar resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os,re
+          mapping={}
+          for root,_,files in os.walk('decoded/res'):
+              for fn in files:
+                  if '$' in fn:
+                      old=os.path.join(root,fn); new=os.path.join(root,fn.replace('$','z_'))
+                      if os.path.exists(new): raise SystemExit(f'collision: {new}')
+                      mapping[old]=new
+          for old,new in mapping.items(): os.rename(old,new)
+          repl={os.path.splitext(os.path.basename(o))[0]:os.path.splitext(os.path.basename(n))[0] for o,n in mapping.items()}
+          for root,_,files in os.walk('decoded/res'):
+              for fn in files:
+                  if not fn.endswith('.xml'): continue
+                  p=os.path.join(root,fn); t=open(p,encoding='utf-8',errors='ignore').read(); o=t
+                  for a,b in repl.items(): t=t.replace(a,b)
+                  if t!=o: open(p,'w',encoding='utf-8').write(t)
+          PY
+
+      - name: Rebuild align sign
+        env:
+          BT: ${{ steps.bt.outputs.dir }}
+          AAPT2_LOCAL: ${{ steps.bt.outputs.aapt2 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          java -jar apktool.jar b -a "$AAPT2_LOCAL" decoded -o APO-Stage-U-home-webview-background-unsigned.apk
+          "$BT/zipalign" -f -p 4 APO-Stage-U-home-webview-background-unsigned.apk APO-Stage-U-home-webview-background-aligned.apk
+          keytool -genkeypair -keystore apo-stage-u.jks -storepass android -keypass android -alias apou -keyalg RSA -keysize 2048 -validity 3650 -dname "CN=APO Stage U,O=Ruzakj,C=ID"
+          "$BT/apksigner" sign --ks apo-stage-u.jks --ks-key-alias apou --ks-pass pass:android --key-pass pass:android --out APO-Stage-U-home-webview-background.apk APO-Stage-U-home-webview-background-aligned.apk
+          "$BT/apksigner" verify --verbose APO-Stage-U-home-webview-background.apk | tee -a stage-u-report.txt
+          stat -c 'APK size: %s bytes' APO-Stage-U-home-webview-background.apk | tee -a stage-u-report.txt
+          sha256sum APO-Stage-U-home-webview-background.apk | tee -a stage-u-report.txt
+
+      - name: Verify final APK contains Home CSS injection
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf verify
+          java -jar apktool.jar d -f -r APO-Stage-U-home-webview-background.apk -o verify >/tmp/stage-u-verify.log 2>&1
+          grep -R -q "data:image/jpeg;base64" verify/smali* || { cat /tmp/stage-u-verify.log; exit 1; }
+          grep -R -q "onPageFinished(Landroid/webkit/WebView;Ljava/lang/String;)V" verify/smali*
+          echo 'STRUCTURAL VERIFY: HOME WEBVIEW CSS INJECTION PRESENT' | tee -a stage-u-report.txt
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: APO-Stage-U-HOME-WEBVIEW-BACKGROUND
+          path: |
+            APO-Stage-U-home-webview-background.apk
+            stage-u-report.txt
+          retention-days: 14
