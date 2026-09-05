@@ -1,0 +1,139 @@
+name: APO Stage H Home Compose Background
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apo-stage-h-home-compose-background.yml'
+      - 'apo-4-9-0.apk'
+      - 'background/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq apktool imagemagick
+
+      - name: Locate Android build-tools
+        id: bt
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          test -n "$SDK"
+          BT=$(find "$SDK/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)
+          test -x "$BT/zipalign"
+          test -x "$BT/apksigner"
+          echo "dir=$BT" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare background
+        shell: bash
+        run: |
+          set -euo pipefail
+          BG="background/file_000000007c6c8206af348f3652a79cd1.png"
+          test -f "$BG"
+          convert "$BG" -auto-orient -resize '1080x2408^' -gravity center -extent 1080x2408 -strip apo_home_bg.png
+          identify apo_home_bg.png
+
+      - name: Decode and patch launcher activity theme
+        shell: bash
+        run: |
+          set -euo pipefail
+          apktool d -f apo-4-9-0.apk -o decoded
+          mkdir -p decoded/res/drawable-nodpi
+          cp apo_home_bg.png decoded/res/drawable-nodpi/apo_home_bg.png
+
+          python3 - <<'PY'
+          import os, re
+          from xml.etree import ElementTree as ET
+
+          manifest='decoded/AndroidManifest.xml'
+          ANDROID='http://schemas.android.com/apk/res/android'
+          ET.register_namespace('android', ANDROID)
+          a='{%s}'%ANDROID
+
+          tree=ET.parse(manifest)
+          root=tree.getroot()
+          app=root.find('application')
+          if app is None:
+              raise SystemExit('application element not found')
+
+          launcher=None
+          for tag in ('activity','activity-alias'):
+              for node in app.findall(tag):
+                  for f in node.findall('intent-filter'):
+                      actions={x.get(a+'name','') for x in f.findall('action')}
+                      cats={x.get(a+'name','') for x in f.findall('category')}
+                      if 'android.intent.action.MAIN' in actions and 'android.intent.category.LAUNCHER' in cats:
+                          launcher=node
+                          break
+                  if launcher is not None:
+                      break
+              if launcher is not None:
+                  break
+
+          if launcher is None:
+              raise SystemExit('launcher activity not found')
+
+          name=launcher.get(a+'name','')
+          old_theme=launcher.get(a+'theme') or app.get(a+'theme') or ''
+          launcher.set(a+'theme','@style/ApoHomeBackgroundTheme')
+          tree.write(manifest, encoding='utf-8', xml_declaration=True)
+
+          values='decoded/res/values'
+          os.makedirs(values, exist_ok=True)
+          out=os.path.join(values,'apo_home_background_theme.xml')
+          if old_theme.startswith('@style/'):
+              parent=old_theme
+              parent_attr=f' parent="{parent}"'
+          else:
+              parent_attr=''
+          xml=(
+              '<?xml version="1.0" encoding="utf-8"?>\n'
+              '<resources>\n'
+              f'  <style name="ApoHomeBackgroundTheme"{parent_attr}>\n'
+              '    <item name="android:windowBackground">@drawable/apo_home_bg</item>\n'
+              '    <item name="android:windowIsTranslucent">false</item>\n'
+              '    <item name="android:colorBackground">@android:color/transparent</item>\n'
+              '  </style>\n'
+              '</resources>\n'
+          )
+          open(out,'w',encoding='utf-8').write(xml)
+          open('stage-h-report.txt','w',encoding='utf-8').write(
+              f'Launcher activity: {name}\nOriginal theme: {old_theme or "(none)"}\nNew theme: @style/ApoHomeBackgroundTheme\nBackground: res/drawable-nodpi/apo_home_bg.png\n'
+          )
+          print(open('stage-h-report.txt').read())
+          PY
+
+      - name: Rebuild and sign
+        env:
+          BT: ${{ steps.bt.outputs.dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          apktool b decoded -o APO-Stage-H-home-background-unsigned.apk
+          "$BT/zipalign" -f -p 4 APO-Stage-H-home-background-unsigned.apk APO-Stage-H-home-background-aligned.apk
+          keytool -genkeypair -keystore apo-stage-h.jks -storepass android -keypass android -alias apoh -keyalg RSA -keysize 2048 -validity 3650 -dname "CN=APO Stage H,O=Ruzakj,C=ID"
+          "$BT/apksigner" sign --ks apo-stage-h.jks --ks-key-alias apoh --ks-pass pass:android --key-pass pass:android --out APO-Stage-H-home-background.apk APO-Stage-H-home-background-aligned.apk
+          "$BT/apksigner" verify --verbose APO-Stage-H-home-background.apk | tee -a stage-h-report.txt
+          stat -c 'APK size: %s bytes' APO-Stage-H-home-background.apk | tee -a stage-h-report.txt
+          sha256sum APO-Stage-H-home-background.apk | tee -a stage-h-report.txt
+
+      - name: Upload Stage H
+        uses: actions/upload-artifact@v4
+        with:
+          name: APO-Stage-H-home-compose-background
+          path: |
+            APO-Stage-H-home-background.apk
+            stage-h-report.txt
+          retention-days: 14
