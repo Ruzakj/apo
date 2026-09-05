@@ -1,0 +1,94 @@
+name: APO Stage P Home Lambda Audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apo-stage-p-home-lambda-audit.yml'
+      - 'apo-4-9-0.apk'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq apktool curl unzip
+          curl -fL https://github.com/skylot/jadx/releases/download/v1.5.3/jadx-1.5.3.zip -o jadx.zip
+          unzip -q jadx.zip -d jadx
+          chmod +x jadx/bin/jadx
+
+      - name: Decompile
+        run: |
+          set -euo pipefail
+          apktool d -f -r apo-4-9-0.apk -o decoded
+          ./jadx/bin/jadx -d jadx-out --show-bad-code apo-4-9-0.apk >/tmp/jadx.log 2>&1 || true
+
+      - name: Trace exact Home content lambda
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > stage-p-home-lambda-audit.txt
+          {
+            echo '=== ROUTE REGISTRATION IN eb/a ==='
+            sed -n '500,570p' decoded/smali/eb/a.smali
+            echo
+            echo '=== FULL eb/b LAMBDA ==='
+            cat decoded/smali/eb/b.smali
+            echo
+            echo '=== ALL CONSTRUCTION SITES OF eb/b ==='
+            grep -RniE 'new-instance .*Leb/b;|invoke-direct .*Leb/b;-><init>' decoded/smali* 2>/dev/null || true
+            echo
+            echo '=== HOME ROUTE CONTEXT IN fd/b ==='
+            sed -n '520,760p' decoded/smali/fd/b.smali
+            echo
+            echo '=== HOME ROUTE CONTEXT IN a7/h ==='
+            sed -n '1320,1500p' decoded/smali/a7/h.smali
+            echo
+            echo '=== COMPOSE CONTAINER CALLS FROM eb/b DIRECT CALLEES ==='
+            python3 - <<'PY'
+          } >> stage-p-home-lambda-audit.txt
+          python3 - <<'PY' >> stage-p-home-lambda-audit.txt
+          import os,re
+          p='decoded/smali/eb/b.smali'
+          txt=open(p,encoding='utf-8',errors='ignore').read()
+          classes=sorted(set(re.findall(r'L([^;]+);',txt)))
+          print('Referenced classes:', len(classes))
+          for c in classes:
+              for base in ('decoded/smali','decoded/smali_classes2','decoded/smali_classes3'):
+                  fp=f'{base}/{c}.smali'
+                  if not os.path.isfile(fp):
+                      continue
+                  lines=open(fp,encoding='utf-8',errors='ignore').read().splitlines()
+                  hits=[i for i,l in enumerate(lines) if any(x in l for x in ('Le2/v4;->a','Scaffold','Surface','LazyColumn','Column','Box','background','Color;'))]
+                  if hits:
+                      print(f'\n--- {fp} ---')
+                      for i in hits[:60]:
+                          print(f'[{i+1}] {lines[i]}')
+                          for j in range(max(0,i-12),min(len(lines),i+13)):
+                              print(f'{j+1:05d}: {lines[j]}')
+          PY
+          {
+            echo
+            echo '=== JADX HOME ROUTE / LAMBDA HITS ==='
+            grep -RniF 'home/{auth_data}?callback_url={callback_url}' jadx-out/sources 2>/dev/null | head -n 100 || true
+            grep -RniE 'class b|MainActivity.*home|auth_data.*callback_url' jadx-out/sources/eb jadx-out/sources/fd jadx-out/sources/a7 2>/dev/null | head -n 500 || true
+          } >> stage-p-home-lambda-audit.txt
+          wc -l stage-p-home-lambda-audit.txt
+
+      - name: Upload audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: APO-Stage-P-home-lambda-audit
+          path: |
+            stage-p-home-lambda-audit.txt
+            /tmp/jadx.log
+          retention-days: 7
