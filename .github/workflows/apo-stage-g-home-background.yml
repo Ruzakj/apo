@@ -1,0 +1,150 @@
+name: APO Stage G Home Background
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apo-stage-g-home-background.yml'
+      - 'apo-4-9-0.apk'
+      - 'background/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq apktool imagemagick
+
+      - name: Locate Android build-tools
+        id: bt
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          test -n "$SDK"
+          BT=$(find "$SDK/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)
+          test -x "$BT/zipalign"
+          test -x "$BT/apksigner"
+          echo "dir=$BT" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare background and signing key
+        shell: bash
+        run: |
+          set -euo pipefail
+          BG="background/file_000000007c6c8206af348f3652a79cd1.png"
+          test -f "$BG"
+          convert "$BG" -auto-orient -resize '1080x2408^' -gravity center -extent 1080x2408 -strip apo_home_bg.png
+          keytool -genkeypair -keystore apo-stage-g.jks -storepass android -keypass android -alias apog -keyalg RSA -keysize 2048 -validity 3650 -dname "CN=APO Stage G,O=Ruzakj,C=ID"
+          identify apo_home_bg.png
+
+      - name: Decode APK and locate Home/Beranda
+        shell: bash
+        run: |
+          set -euo pipefail
+          apktool d -f apo-4-9-0.apk -o decoded
+          {
+            echo 'HOME STRING MATCHES'
+            echo '==================='
+            grep -RniE 'Halo,|Status pengajuan POD|Scan self-service|Pesanan Siap|Dalam Pengiriman|Equipment Rusak|Monitoring SAPA|Operasional SAPA|Pengajuan Nomor WA' decoded/res decoded/smali* 2>/dev/null | head -n 400 || true
+            echo
+            echo 'LIKELY HOME LAYOUTS'
+            echo '==================='
+            grep -RliE 'Status pengajuan POD|Scan self-service|Equipment Rusak|Monitoring SAPA|Operasional SAPA|Pengajuan Nomor WA' decoded/res/layout* 2>/dev/null | head -n 100 || true
+          } | tee home-audit.txt
+
+      - name: Patch static Home layout when found
+        id: patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p decoded/res/drawable-nodpi
+          cp apo_home_bg.png decoded/res/drawable-nodpi/apo_home_bg.png
+
+          python3 - <<'PY'
+          import glob, os, re
+          from xml.etree import ElementTree as ET
+
+          android='{http://schemas.android.com/apk/res/android}'
+          terms=['Status pengajuan POD','Scan self-service','Equipment Rusak','Monitoring SAPA','Operasional SAPA','Pengajuan Nomor WA']
+          candidates=[]
+          for p in glob.glob('decoded/res/layout*/*.xml'):
+              try:
+                  t=open(p,encoding='utf-8',errors='ignore').read()
+              except Exception:
+                  continue
+              score=sum(1 for x in terms if x.lower() in t.lower())
+              if score:
+                  candidates.append((score,p))
+
+          candidates.sort(reverse=True)
+          report=[]
+          patched=[]
+
+          for score,p in candidates[:10]:
+              report.append(f'{score}\t{p}')
+
+          # Patch only when a layout has at least two home-specific markers.
+          target=next((p for score,p in candidates if score>=2), None)
+          if target:
+              tree=ET.parse(target)
+              root=tree.getroot()
+              root.set(android+'background','@drawable/apo_home_bg')
+              tree.write(target,encoding='utf-8',xml_declaration=True)
+              patched.append(target)
+
+          with open('home-patch-report.txt','w') as f:
+              f.write('HOME LAYOUT CANDIDATES\n')
+              f.write('======================\n')
+              for r in report:
+                  f.write(r+'\n')
+              f.write('\nPATCHED\n=======\n')
+              if patched:
+                  for p in patched:
+                      f.write(p+'\n')
+              else:
+                  f.write('NONE - Home appears code/Compose-driven or strings are indirect.\n')
+
+          open('patched.flag','w').write('yes' if patched else 'no')
+          PY
+
+          cat home-patch-report.txt
+          echo "patched=$(cat patched.flag)" >> "$GITHUB_OUTPUT"
+
+      - name: Rebuild patched APK
+        if: steps.patch.outputs.patched == 'yes'
+        env:
+          BT: ${{ steps.bt.outputs.dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          apktool b decoded -o APO-Stage-G-home-background-unsigned.apk
+          "$BT/zipalign" -f -p 4 APO-Stage-G-home-background-unsigned.apk APO-Stage-G-home-background-aligned.apk
+          "$BT/apksigner" sign --ks apo-stage-g.jks --ks-key-alias apog --ks-pass pass:android --key-pass pass:android --out APO-Stage-G-home-background.apk APO-Stage-G-home-background-aligned.apk
+          "$BT/apksigner" verify --verbose APO-Stage-G-home-background.apk
+          stat -c 'Stage G APK: %s bytes' APO-Stage-G-home-background.apk | tee stage-g-size.txt
+
+      - name: Create no-patch marker
+        if: steps.patch.outputs.patched != 'yes'
+        run: |
+          echo 'No static Home layout was safely identified. Build intentionally not produced.' > stage-g-size.txt
+
+      - name: Upload Stage G audit/build
+        uses: actions/upload-artifact@v4
+        with:
+          name: APO-Stage-G-home-background
+          path: |
+            home-audit.txt
+            home-patch-report.txt
+            stage-g-size.txt
+            APO-Stage-G-home-background.apk
+          if-no-files-found: ignore
+          retention-days: 14
