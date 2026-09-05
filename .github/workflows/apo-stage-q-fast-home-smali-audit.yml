@@ -1,0 +1,64 @@
+name: APO Stage Q Fast Home Smali Audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apo-stage-q-fast-home-smali-audit.yml'
+      - 'apo-4-9-0.apk'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install apktool
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq apktool
+      - name: Decode and dump exact Home lambda
+        run: |
+          set -euo pipefail
+          apktool d -f -r apo-4-9-0.apk -o decoded
+          : > stage-q-home-smali.txt
+          {
+            echo '=== eb/b full ==='
+            cat decoded/smali/eb/b.smali
+            echo
+            echo '=== eb/b constructors ==='
+            grep -RniE 'new-instance .*Leb/b;|invoke-direct .*Leb/b;-><init>' decoded/smali* 2>/dev/null || true
+            echo
+            echo '=== route registration ==='
+            sed -n '500,560p' decoded/smali/eb/a.smali
+            echo
+            echo '=== class eb/b references ==='
+          } >> stage-q-home-smali.txt
+          python3 - <<'PY' >> stage-q-home-smali.txt
+          import os,re
+          src=open('decoded/smali/eb/b.smali',encoding='utf-8',errors='ignore').read()
+          classes=sorted(set(re.findall(r'L([^;]+);',src)))
+          for c in classes:
+              for base in ('decoded/smali','decoded/smali_classes2','decoded/smali_classes3'):
+                  p=f'{base}/{c}.smali'
+                  if not os.path.isfile(p): continue
+                  txt=open(p,encoding='utf-8',errors='ignore').read()
+                  if any(x in txt for x in ('Le2/v4;->a','Scaffold','LazyColumn','Color;','background')):
+                      print(f'\n===== {p} =====')
+                      lines=txt.splitlines()
+                      for i,l in enumerate(lines):
+                          if any(x in l for x in ('Le2/v4;->a','Scaffold','LazyColumn','Color;','background')):
+                              for j in range(max(0,i-20),min(len(lines),i+21)):
+                                  print(f'{j+1:05d}: {lines[j]}')
+          PY
+          wc -l stage-q-home-smali.txt
+      - name: Upload audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: APO-Stage-Q-fast-home-smali-audit
+          path: stage-q-home-smali.txt
+          retention-days: 7
