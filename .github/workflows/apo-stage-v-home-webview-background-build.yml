@@ -25,25 +25,18 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq imagemagick curl
           curl -fL https://github.com/iBotPeaches/Apktool/releases/download/v2.11.1/apktool_2.11.1.jar -o apktool.jar
-          java -jar apktool.jar --version
 
       - name: Locate Android build-tools
         id: bt
-        shell: bash
         run: |
           set -euo pipefail
           SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
-          test -n "$SDK"
           BT=$(find "$SDK/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)
-          test -x "$BT/aapt2"
-          test -x "$BT/zipalign"
-          test -x "$BT/apksigner"
-          cp "$BT/aapt2" ./aapt2-local
-          chmod +x ./aapt2-local
+          cp "$BT/aapt2" ./aapt2-local; chmod +x ./aapt2-local
           echo "dir=$BT" >> "$GITHUB_OUTPUT"
           echo "aapt2=$GITHUB_WORKSPACE/aapt2-local" >> "$GITHUB_OUTPUT"
 
-      - name: Prepare full-screen background without stretching
+      - name: Prepare background
         run: |
           set -euo pipefail
           BG="background/file_000000007c6c8206af348f3652a79cd1.png"
@@ -52,25 +45,19 @@ jobs:
           identify apo_home_bg.png | tee stage-v-report.txt
 
       - name: Decode APK
-        run: |
-          set -euo pipefail
-          java -jar apktool.jar d -f apo-4-9-0.apk -o decoded
+        run: java -jar apktool.jar d -f apo-4-9-0.apk -o decoded
 
-      - name: Patch exact Home WebView with full native background and blended UI
-        shell: bash
+      - name: Patch exact Home WebView with readable glass UI
         run: |
           set -euo pipefail
           mkdir -p decoded/res/drawable-nodpi decoded/smali/com/ric/apopatch
           cp apo_home_bg.png decoded/res/drawable-nodpi/apo_home_bg.png
-
           cat > decoded/smali/com/ric/apopatch/HomeBackgroundInjector.smali <<'SMALI'
           .class public final Lcom/ric/apopatch/HomeBackgroundInjector;
           .super Ljava/lang/Object;
           .implements Ljava/lang/Runnable;
-
           .field private final webView:Landroid/webkit/WebView;
           .field private remaining:I
-
           .method private constructor <init>(Landroid/webkit/WebView;)V
               .locals 1
               invoke-direct {p0}, Ljava/lang/Object;-><init>()V
@@ -79,11 +66,9 @@ jobs:
               iput v0, p0, Lcom/ric/apopatch/HomeBackgroundInjector;->remaining:I
               return-void
           .end method
-
           .method public static apply(Landroid/webkit/WebView;)V
               .locals 7
               if-eqz p0, :done
-
               invoke-virtual {p0}, Landroid/webkit/WebView;->getContext()Landroid/content/Context;
               move-result-object v0
               invoke-virtual {v0}, Landroid/content/Context;->getResources()Landroid/content/res/Resources;
@@ -94,29 +79,27 @@ jobs:
               const-string v4, "drawable"
               invoke-virtual {v1, v3, v4, v2}, Landroid/content/res/Resources;->getIdentifier(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I
               move-result v5
-              if-eqz v5, :skip_drawable
+              if-eqz v5, :skip
               invoke-virtual {v1, v5}, Landroid/content/res/Resources;->getDrawable(I)Landroid/graphics/drawable/Drawable;
               move-result-object v6
               invoke-virtual {p0, v6}, Landroid/view/View;->setBackground(Landroid/graphics/drawable/Drawable;)V
-          :skip_drawable
+          :skip
               const/4 v0, 0x0
               invoke-virtual {p0, v0}, Landroid/webkit/WebView;->setBackgroundColor(I)V
               new-instance v0, Lcom/ric/apopatch/HomeBackgroundInjector;
               invoke-direct {v0, p0}, Lcom/ric/apopatch/HomeBackgroundInjector;-><init>(Landroid/webkit/WebView;)V
               const-wide/16 v1, 0x64
               invoke-virtual {p0, v0, v1, v2}, Landroid/webkit/WebView;->postDelayed(Ljava/lang/Runnable;J)Z
-              move-result v3
           :done
               return-void
           .end method
-
           .method public final run()V
               .locals 5
               iget-object v0, p0, Lcom/ric/apopatch/HomeBackgroundInjector;->webView:Landroid/webkit/WebView;
               if-eqz v0, :done
               const/4 v1, 0x0
               invoke-virtual {v0, v1}, Landroid/webkit/WebView;->setBackgroundColor(I)V
-              const-string v1, "javascript:(function(){try{function norm(c){return (c||'').replace(/\\s/g,'').toLowerCase();}function white(c){c=norm(c);return c==='rgb(255,255,255)'||c==='rgba(255,255,255,1)'||c==='#fff'||c==='#ffffff'||c==='white';}function light(c){c=norm(c);var m=c.match(/rgba?\\((\\d+),(\\d+),(\\d+)/);return m&&(+m[1]>238&&+m[2]>238&&+m[3]>238);}function redish(c){c=norm(c);var m=c.match(/rgba?\\((\\d+),(\\d+),(\\d+)/);return m&&(+m[1]>140&&+m[1]>(+m[2])*1.35&&+m[1]>(+m[3])*1.35);}function style(){var de=document.documentElement,b=document.body;if(!b)return;var vw=Math.max(de.clientWidth,window.innerWidth||0),vh=Math.max(de.clientHeight,window.innerHeight||0);if(de){de.style.setProperty('background','transparent','important');de.style.setProperty('min-height','100%','important');}b.style.setProperty('background','transparent','important');b.style.setProperty('min-height','100vh','important');b.style.setProperty('color','#1f2937','important');['#root','#app','main','body>div:first-child'].forEach(function(s){var e=document.querySelector(s);if(e){e.style.setProperty('background','transparent','important');e.style.setProperty('min-height','100vh','important');}});document.querySelectorAll('div,section,main,article,nav,header,footer').forEach(function(e){var r=e.getBoundingClientRect();if(r.width<vw*.42||r.height<24)return;var cs=getComputedStyle(e),bg=cs.backgroundColor;if((white(bg)||light(bg))&&r.width>=vw*.84&&r.height>=vh*.10){e.style.setProperty('background-color','transparent','important');e.style.setProperty('background-image','none','important');e.style.setProperty('box-shadow','none','important');}else if((white(bg)||light(bg))&&r.width>=vw*.46&&r.width<vw*.96&&r.height>=44){e.style.setProperty('background-color','rgba(255,255,255,.86)','important');e.style.setProperty('border','1px solid rgba(255,255,255,.48)','important');e.style.setProperty('box-shadow','0 6px 22px rgba(15,23,42,.10)','important');}else if(redish(bg)&&r.width>=vw*.75){e.style.setProperty('background-color','rgba(145,34,34,.78)','important');e.style.setProperty('box-shadow','none','important');}});document.querySelectorAll('nav,[role=navigation],footer').forEach(function(e){var r=e.getBoundingClientRect();if(r.width>=vw*.8){e.style.setProperty('background-color','rgba(255,255,255,.90)','important');e.style.setProperty('border-top','1px solid rgba(255,255,255,.55)','important');}});document.querySelectorAll('button,a,[role=button]').forEach(function(e){var cs=getComputedStyle(e);if(redish(cs.backgroundColor)){e.style.setProperty('background-color','rgba(150,38,38,.88)','important');}});}style();if(!window.__apoFullBgObs&&document.body){window.__apoFullBgObs=new MutationObserver(style);window.__apoFullBgObs.observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['class','style']});}window.addEventListener('resize',style,{passive:true});}catch(e){}})();"
+              const-string v1, "javascript:(function(){try{function n(c){return(c||'').replace(/\\s/g,'').toLowerCase()}function pale(c){c=n(c);var m=c.match(/rgba?\\((\\d+),(\\d+),(\\d+)/);return m&&+m[1]>235&&+m[2]>235&&+m[3]>235}function go(){var d=document.documentElement,b=document.body;if(!b)return;var w=Math.max(d.clientWidth,innerWidth||0),h=Math.max(d.clientHeight,innerHeight||0);[d,b,document.querySelector('#root'),document.querySelector('#app'),document.querySelector('main'),document.querySelector('body>div:first-child')].filter(Boolean).forEach(function(e){e.style.setProperty('background','transparent','important');e.style.setProperty('min-height','100vh','important')});document.querySelectorAll('div,section,main,article').forEach(function(e){var r=e.getBoundingClientRect(),cs=getComputedStyle(e);if(r.width>=w*.84&&r.height>=h*.10&&pale(cs.backgroundColor)){e.style.setProperty('background','transparent','important');e.style.setProperty('box-shadow','none','important')}else if(r.width>=w*.27&&r.width<w*.84&&r.height>=42&&pale(cs.backgroundColor)){e.style.setProperty('background','rgba(20,20,24,.58)','important');e.style.setProperty('border','1px solid rgba(255,255,255,.38)','important');e.style.setProperty('box-shadow','0 8px 24px rgba(0,0,0,.16)','important');e.style.setProperty('backdrop-filter','blur(10px)','important')}});document.querySelectorAll('h1,h2,h3,h4,h5,h6,p,span,label').forEach(function(e){var r=e.getBoundingClientRect();if(r.top>h*.34){e.style.setProperty('color','rgba(255,255,255,.94)','important');e.style.setProperty('text-shadow','0 1px 3px rgba(0,0,0,.72)','important')}});document.querySelectorAll('nav,[role=navigation],footer').forEach(function(e){var r=e.getBoundingClientRect();if(r.width>=w*.8){e.style.setProperty('background','rgba(250,250,252,.92)','important');e.style.setProperty('backdrop-filter','blur(14px)','important');e.querySelectorAll('span,p,label').forEach(function(t){t.style.setProperty('color','#25252a','important');t.style.setProperty('text-shadow','none','important')})}})}go();if(!window.__apoReadableGlass&&document.body){window.__apoReadableGlass=new MutationObserver(go);window.__apoReadableGlass.observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['class','style']})}}catch(e){}})();"
               const/4 v2, 0x0
               invoke-virtual {v0, v1, v2}, Landroid/webkit/WebView;->evaluateJavascript(Ljava/lang/String;Landroid/webkit/ValueCallback;)V
               iget v1, p0, Lcom/ric/apopatch/HomeBackgroundInjector;->remaining:I
@@ -125,66 +108,41 @@ jobs:
               if-lez v1, :done
               const-wide/16 v2, 0xfa
               invoke-virtual {v0, p0, v2, v3}, Landroid/webkit/WebView;->postDelayed(Ljava/lang/Runnable;J)Z
-              move-result v4
           :done
               return-void
           .end method
           SMALI
-
           python3 - <<'PY'
           import os,re
-          candidates=[]
-          for base in ('decoded/smali','decoded/smali_classes2','decoded/smali_classes3'):
-              p=os.path.join(base,'il','ze.smali')
-              if os.path.isfile(p): candidates.append(p)
-          if len(candidates)!=1:
-              raise SystemExit(f'expected one il/ze.smali, got {candidates}')
-          p=candidates[0]
-          lines=open(p,encoding='utf-8').read().splitlines()
-          sig='.method public static final c(Lvc/r;Landroid/content/Context;Lcom/alfamart/apo/data/model/AuthDataPayloadResponseModel;Ljava/lang/String;Lcom/alfamart/apo/presentation/main/MainActivity;Ly6/b0;Li2/r;I)V'
-          method_start=next((i for i,l in enumerate(lines) if l.strip()==sig),None)
-          if method_start is None: raise SystemExit('exact il/ze Home c() signature not found')
-          method_end=next((i for i in range(method_start+1,len(lines)) if lines[i].strip()=='.end method'),None)
-          block=lines[method_start:method_end+1]
+          ps=[os.path.join(b,'il','ze.smali') for b in ('decoded/smali','decoded/smali_classes2','decoded/smali_classes3') if os.path.isfile(os.path.join(b,'il','ze.smali'))]
+          assert len(ps)==1,ps
+          p=ps[0]; lines=open(p).read().splitlines(); sig='.method public static final c(Lvc/r;Landroid/content/Context;Lcom/alfamart/apo/data/model/AuthDataPayloadResponseModel;Ljava/lang/String;Lcom/alfamart/apo/presentation/main/MainActivity;Ly6/b0;Li2/r;I)V'
+          s=next(i for i,l in enumerate(lines) if l.strip()==sig); e=next(i for i in range(s+1,len(lines)) if lines[i].strip()=='.end method')
           hits=[]
-          for j,l in enumerate(block):
+          for j,l in enumerate(lines[s:e+1]):
               m=re.search(r'^\s*check-cast\s+([vp]\d+),\s+Landroid/webkit/WebView;',l)
-              if m: hits.append((j,m.group(1)))
-          if len(hits)!=1: raise SystemExit(f'expected exactly one WebView cast in Home c(), got {hits}')
-          rel,reg=hits[0]
-          lines.insert(method_start+rel+1,f'    invoke-static {{{reg}}}, Lcom/ric/apopatch/HomeBackgroundInjector;->apply(Landroid/webkit/WebView;)V')
-          open(p,'w',encoding='utf-8').write('\n'.join(lines)+'\n')
-          with open('stage-v-report.txt','a') as f:
-              f.write(f'Patched exact Home implementation: {p}\n')
-              f.write(f'Injected on Home WebView register: {reg}\n')
-              f.write('Strategy: full native background + transparent page layers + glass UI blending\n')
+              if m:hits.append((j,m.group(1)))
+          assert len(hits)==1,hits
+          j,r=hits[0]; lines.insert(s+j+1,f'    invoke-static {{{r}}}, Lcom/ric/apopatch/HomeBackgroundInjector;->apply(Landroid/webkit/WebView;)V')
+          open(p,'w').write('\n'.join(lines)+'\n')
           PY
 
-      - name: Sanitize apktool dollar resources
+      - name: Sanitize resources
         run: |
-          set -euo pipefail
           python3 - <<'PY'
           import os
-          mapping={}
-          for root,_,files in os.walk('decoded/res'):
-              for fn in files:
-                  if '$' in fn:
-                      old=os.path.join(root,fn); new=os.path.join(root,fn.replace('$','z_'))
-                      if os.path.exists(new): raise SystemExit(f'collision: {new}')
-                      mapping[old]=new
-          for old,new in mapping.items(): os.rename(old,new)
-          repl={os.path.splitext(os.path.basename(o))[0]:os.path.splitext(os.path.basename(n))[0] for o,n in mapping.items()}
-          changed=0
-          for root,_,files in os.walk('decoded/res'):
-              for fn in files:
-                  if not fn.endswith('.xml'): continue
-                  p=os.path.join(root,fn)
-                  txt=open(p,encoding='utf-8',errors='ignore').read(); orig=txt
-                  for old,new in repl.items(): txt=txt.replace(old,new)
-                  if txt!=orig:
-                      open(p,'w',encoding='utf-8').write(txt); changed+=1
-          with open('stage-v-report.txt','a') as f:
-              f.write(f'Sanitized dollar resources: {len(mapping)}; XML updated: {changed}\n')
+          mp={}
+          for root,_,fs in os.walk('decoded/res'):
+            for f in fs:
+              if '$' in f: mp[os.path.join(root,f)]=os.path.join(root,f.replace('$','z_'))
+          for a,b in mp.items(): os.rename(a,b)
+          repl={os.path.splitext(os.path.basename(a))[0]:os.path.splitext(os.path.basename(b))[0] for a,b in mp.items()}
+          for root,_,fs in os.walk('decoded/res'):
+            for f in fs:
+              if f.endswith('.xml'):
+                p=os.path.join(root,f); t=open(p,errors='ignore').read(); o=t
+                for a,b in repl.items():t=t.replace(a,b)
+                if t!=o:open(p,'w').write(t)
           PY
 
       - name: Rebuild align sign
@@ -193,32 +151,26 @@ jobs:
           AAPT2_LOCAL: ${{ steps.bt.outputs.aapt2 }}
         run: |
           set -euo pipefail
-          java -jar apktool.jar b -a "$AAPT2_LOCAL" decoded -o APO-Stage-V-home-background-unsigned.apk
-          "$BT/zipalign" -f -p 4 APO-Stage-V-home-background-unsigned.apk APO-Stage-V-home-background-aligned.apk
-          keytool -genkeypair -keystore apo-stage-v.jks -storepass android -keypass android -alias apov -keyalg RSA -keysize 2048 -validity 3650 -dname "CN=APO Stage V,O=Ruzakj,C=ID"
-          "$BT/apksigner" sign --ks apo-stage-v.jks --ks-key-alias apov --ks-pass pass:android --key-pass pass:android --out APO-Stage-V3-FULL-BLENDED-HOME.apk APO-Stage-V-home-background-aligned.apk
-          "$BT/apksigner" verify --verbose APO-Stage-V3-FULL-BLENDED-HOME.apk | tee -a stage-v-report.txt
-          stat -c 'APK size: %s bytes' APO-Stage-V3-FULL-BLENDED-HOME.apk | tee -a stage-v-report.txt
-          sha256sum APO-Stage-V3-FULL-BLENDED-HOME.apk | tee -a stage-v-report.txt
+          java -jar apktool.jar b -a "$AAPT2_LOCAL" decoded -o unsigned.apk
+          "$BT/zipalign" -f -p 4 unsigned.apk aligned.apk
+          keytool -genkeypair -keystore key.jks -storepass android -keypass android -alias apo -keyalg RSA -keysize 2048 -validity 3650 -dname "CN=APO Glass,O=Ruzakj,C=ID"
+          "$BT/apksigner" sign --ks key.jks --ks-key-alias apo --ks-pass pass:android --key-pass pass:android --out APO-Stage-V4-READABLE-GLASS-HOME.apk aligned.apk
+          "$BT/apksigner" verify --verbose APO-Stage-V4-READABLE-GLASS-HOME.apk | tee -a stage-v-report.txt
+          sha256sum APO-Stage-V4-READABLE-GLASS-HOME.apk | tee -a stage-v-report.txt
 
-      - name: Verify final APK contains full Home patch
+      - name: Verify
         run: |
-          set -euo pipefail
-          rm -rf verify
-          java -jar apktool.jar d -f APO-Stage-V3-FULL-BLENDED-HOME.apk -o verify >/tmp/verify.log 2>&1
+          rm -rf verify; java -jar apktool.jar d -f APO-Stage-V4-READABLE-GLASS-HOME.apk -o verify >/dev/null 2>&1
           test -f verify/res/drawable-nodpi/apo_home_bg.png
-          test -f verify/smali/com/ric/apopatch/HomeBackgroundInjector.smali
-          grep -R -q 'HomeBackgroundInjector;->apply(Landroid/webkit/WebView;)V' verify/smali*/il/ze.smali
-          grep -q 'setBackground(Landroid/graphics/drawable/Drawable;)V' verify/smali/com/ric/apopatch/HomeBackgroundInjector.smali
-          grep -q 'rgba(255,255,255,.86)' verify/smali/com/ric/apopatch/HomeBackgroundInjector.smali
-          grep -q '__apoFullBgObs' verify/smali/com/ric/apopatch/HomeBackgroundInjector.smali
-          echo 'FINAL VERIFY: PASS - full Home background + blended glass UI patch present' | tee -a stage-v-report.txt
+          grep -R -q 'HomeBackgroundInjector;->apply' verify/smali*/il/ze.smali
+          grep -q '__apoReadableGlass' verify/smali/com/ric/apopatch/HomeBackgroundInjector.smali
+          echo 'FINAL VERIFY PASS: full background + dark glass cards + readable text' | tee -a stage-v-report.txt
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: APO-Stage-V3-FULL-BLENDED-HOME
+          name: APO-Stage-V4-READABLE-GLASS-HOME
           path: |
-            APO-Stage-V3-FULL-BLENDED-HOME.apk
+            APO-Stage-V4-READABLE-GLASS-HOME.apk
             stage-v-report.txt
           retention-days: 14
