@@ -54,8 +54,8 @@ jobs:
             sed -n '1320,1500p' decoded/smali/a7/h.smali
             echo
             echo '=== COMPOSE CONTAINER CALLS FROM eb/b DIRECT CALLEES ==='
-            python3 - <<'PY'
           } >> stage-p-home-lambda-audit.txt
+
           python3 - <<'PY' >> stage-p-home-lambda-audit.txt
           import os,re
           p='decoded/smali/eb/b.smali'
@@ -76,11 +76,12 @@ jobs:
                           for j in range(max(0,i-12),min(len(lines),i+13)):
                               print(f'{j+1:05d}: {lines[j]}')
           PY
+
           {
             echo
             echo '=== JADX HOME ROUTE / LAMBDA HITS ==='
             grep -RniF 'home/{auth_data}?callback_url={callback_url}' jadx-out/sources 2>/dev/null | head -n 100 || true
-            grep -RniE 'class b|MainActivity.*home|auth_data.*callback_url' jadx-out/sources/eb jadx-out/sources/fd jadx-out/sources/a7 2>/dev/null | head -n 500 || true
+            grep -RniE 'auth_data|callback_url|MainActivity|home' jadx-out/sources/eb jadx-out/sources/fd jadx-out/sources/a7 2>/dev/null | head -n 1000 || true
           } >> stage-p-home-lambda-audit.txt
           wc -l stage-p-home-lambda-audit.txt
 
