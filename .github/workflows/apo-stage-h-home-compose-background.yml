@@ -38,7 +38,10 @@ jobs:
           test -x "$BT/aapt2"
           test -x "$BT/zipalign"
           test -x "$BT/apksigner"
+          cp "$BT/aapt2" ./aapt2-local
+          chmod +x ./aapt2-local
           echo "dir=$BT" >> "$GITHUB_OUTPUT"
+          echo "aapt2=$GITHUB_WORKSPACE/aapt2-local" >> "$GITHUB_OUTPUT"
 
       - name: Prepare background
         shell: bash
@@ -109,13 +112,15 @@ jobs:
           print(open('stage-h-report.txt').read())
           PY
 
-      - name: Rebuild with explicit AAPT2 and sign
+      - name: Rebuild with local AAPT2 and sign
         env:
           BT: ${{ steps.bt.outputs.dir }}
+          AAPT2_LOCAL: ${{ steps.bt.outputs.aapt2 }}
         shell: bash
         run: |
           set -euo pipefail
-          java -jar apktool.jar b -a "$BT/aapt2" decoded -o APO-Stage-H-home-background-unsigned.apk
+          test -x "$AAPT2_LOCAL"
+          java -jar apktool.jar b -a "$AAPT2_LOCAL" decoded -o APO-Stage-H-home-background-unsigned.apk
           "$BT/zipalign" -f -p 4 APO-Stage-H-home-background-unsigned.apk APO-Stage-H-home-background-aligned.apk
           keytool -genkeypair -keystore apo-stage-h.jks -storepass android -keypass android -alias apoh -keyalg RSA -keysize 2048 -validity 3650 -dname "CN=APO Stage H,O=Ruzakj,C=ID"
           "$BT/apksigner" sign --ks apo-stage-h.jks --ks-key-alias apoh --ks-pass pass:android --key-pass pass:android --out APO-Stage-H-home-background.apk APO-Stage-H-home-background-aligned.apk
