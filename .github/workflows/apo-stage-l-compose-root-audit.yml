@@ -1,0 +1,40 @@
+name: APO Stage L Compose Root Audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apo-stage-l-compose-root-audit.yml'
+      - 'apo-4-9-0.apk'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decompile Compose root
+        run: |
+          set -euo pipefail
+          curl -fL https://github.com/skylot/jadx/releases/download/v1.5.3/jadx-1.5.3.zip -o jadx.zip
+          unzip -q jadx.zip -d jadx
+          chmod +x jadx/bin/jadx
+          ./jadx/bin/jadx -d out --show-bad-code --deobf apo-4-9-0.apk >/tmp/jadx.log 2>&1 || true
+          {
+            echo '=== p126fd/C3460b.java ==='
+            sed -n '1,2200p' out/sources/p126fd/C3460b.java || true
+            echo
+            echo '=== p126fd/AbstractActivityC3465g.java ==='
+            sed -n '1,1600p' out/sources/p126fd/AbstractActivityC3465g.java || true
+            echo
+            echo '=== references around C3460b ==='
+            grep -RniE 'C3460b|397543288|m2334a\(' out/sources 2>/dev/null | head -n 1000 || true
+          } | tee stage-l-compose-root.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: APO-Stage-L-compose-root-audit
+          path: stage-l-compose-root.txt
+          retention-days: 7
