@@ -1,0 +1,161 @@
+name: APO Slim Stage E Visual Stripped
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apo-slim-stage-e.yml'
+      - 'apo-4-9-0.apk'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install media tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick ffmpeg
+
+      - name: Locate Android build-tools
+        id: bt
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          test -n "$SDK"
+          BT=$(find "$SDK/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)
+          test -x "$BT/zipalign"
+          test -x "$BT/apksigner"
+          echo "dir=$BT" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare tiny resources and test key
+        shell: bash
+        run: |
+          set -euo pipefail
+          convert -size 1x1 xc:none tiny.webp
+          convert -size 1x1 xc:none tiny.png
+          convert -size 1x1 xc:white tiny.jpg
+          convert -size 1x1 xc:none tiny.gif
+          ffmpeg -loglevel error -f lavfi -i anullsrc=r=8000:cl=mono -t 0.05 -q:a 9 -acodec libmp3lame tiny.mp3 -y
+          keytool -genkeypair -keystore apo-slim-test.jks -storepass android -keypass android -alias aposlim -keyalg RSA -keysize 2048 -validity 3650 -dname "CN=APO Slim Test,O=Ruzakj,C=ID"
+
+      - name: Build Stage E visual stripped
+        env:
+          BT: ${{ steps.bt.outputs.dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import zipfile, os
+
+          src='apo-4-9-0.apk'
+          dst='APO-Slim-Stage-E-visual-stripped-unsigned.apk'
+          keep_abi='lib/arm64-v8a/'
+          remove_native={'lib/arm64-v8a/libjingle_peerconnection_so.so'}
+
+          tiny={
+              '.webp': open('tiny.webp','rb').read(),
+              '.png': open('tiny.png','rb').read(),
+              '.jpg': open('tiny.jpg','rb').read(),
+              '.jpeg': open('tiny.jpg','rb').read(),
+              '.gif': open('tiny.gif','rb').read(),
+              '.mp3': open('tiny.mp3','rb').read(),
+          }
+
+          replaced=[]
+          removed=[]
+          kept_barcode=[]
+          with zipfile.ZipFile(src,'r') as zin, zipfile.ZipFile(dst,'w',allowZip64=True) as zout:
+              for i in zin.infolist():
+                  if i.is_dir():
+                      continue
+                  n=i.filename
+                  low=n.lower()
+
+                  if n.startswith('lib/') and not n.startswith(keep_abi):
+                      removed.append((n,i.file_size,'non-arm64'))
+                      continue
+                  if n in remove_native:
+                      removed.append((n,i.file_size,'webrtc'))
+                      continue
+                  if low.startswith('meta-inf/') and low.endswith(('.rsa','.dsa','.ec','.sf')):
+                      removed.append((n,i.file_size,'old-signature'))
+                      continue
+
+                  if 'barhopper' in low or 'barcode' in low or 'mlkit_barcode_models' in low:
+                      kept_barcode.append((n,i.file_size))
+
+                  data=zin.read(n)
+                  ext=os.path.splitext(low)[1]
+
+                  # Strip ALL raster UI resources, regardless of size, but keep resource paths alive.
+                  if n.startswith('res/') and ext in ('.webp','.png','.jpg','.jpeg','.gif'):
+                      old=i.file_size
+                      data=tiny[ext]
+                      replaced.append((n,old,len(data),'raster-all'))
+                  elif ext == '.mp3':
+                      old=i.file_size
+                      data=tiny['.mp3']
+                      replaced.append((n,old,len(data),'audio-silent'))
+
+                  ni=zipfile.ZipInfo(n, i.date_time)
+                  ni.compress_type=i.compress_type
+                  ni.comment=i.comment
+                  ni.extra=i.extra
+                  ni.internal_attr=i.internal_attr
+                  ni.external_attr=i.external_attr
+                  ni.create_system=i.create_system
+                  ni.flag_bits=i.flag_bits
+                  zout.writestr(ni,data)
+
+          with open('APO-Slim-Stage-E-report-details.txt','w') as f:
+              f.write('Stage E Visual Stripped details\n')
+              f.write('===============================\n')
+              f.write(f'Replaced entries: {len(replaced)}\n')
+              f.write(f'Removed entries: {len(removed)}\n')
+              f.write(f'Original bytes neutralized: {sum(x[1] for x in replaced)}\n')
+              f.write(f'Bytes removed: {sum(x[1] for x in removed)}\n\n')
+              f.write('BARCODE-RELATED ENTRIES PRESERVED:\n')
+              for n,s in sorted(kept_barcode,key=lambda x:x[1],reverse=True):
+                  f.write(f'{s:12d}  {n}\n')
+              f.write('\nREPLACED (top 150):\n')
+              for n,old,new,kind in sorted(replaced,key=lambda x:x[1],reverse=True)[:150]:
+                  f.write(f'{old:12d} -> {new:8d}  {kind:14} {n}\n')
+              f.write('\nREMOVED:\n')
+              for n,s,why in sorted(removed,key=lambda x:x[1],reverse=True):
+                  f.write(f'{s:12d}  {why:14} {n}\n')
+          PY
+
+          "$BT/zipalign" -f -p 4 APO-Slim-Stage-E-visual-stripped-unsigned.apk APO-Slim-Stage-E-visual-stripped-aligned.apk
+          "$BT/apksigner" sign --ks apo-slim-test.jks --ks-key-alias aposlim --ks-pass pass:android --key-pass pass:android --out APO-Slim-Stage-E-visual-stripped.apk APO-Slim-Stage-E-visual-stripped-aligned.apk
+          "$BT/apksigner" verify --verbose APO-Slim-Stage-E-visual-stripped.apk
+
+      - name: Report
+        run: |
+          {
+            echo 'APO Slim Stage E Visual Stripped'
+            echo '================================'
+            stat -c 'Baseline: %s bytes  %n' apo-4-9-0.apk
+            stat -c 'Stage E:  %s bytes  %n' APO-Slim-Stage-E-visual-stripped.apk
+            echo
+            sha256sum APO-Slim-Stage-E-visual-stripped.apk
+            echo
+            head -n 220 APO-Slim-Stage-E-report-details.txt
+          } | tee APO-Slim-Stage-E-report.txt
+
+      - name: Upload Stage E
+        uses: actions/upload-artifact@v4
+        with:
+          name: APO-Slim-Stage-E-visual-stripped
+          path: |
+            APO-Slim-Stage-E-visual-stripped.apk
+            APO-Slim-Stage-E-report.txt
+            APO-Slim-Stage-E-report-details.txt
+          retention-days: 14
