@@ -1,0 +1,45 @@
+name: APO Stage T JADX Home Source
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apo-stage-t-jadx-home-source.yml'
+      - 'apo-4-9-0.apk'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install JADX
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq curl unzip
+          curl -fL https://github.com/skylot/jadx/releases/download/v1.5.3/jadx-1.5.3.zip -o jadx.zip
+          unzip -q jadx.zip -d jadx
+          chmod +x jadx/bin/jadx
+      - name: Export Home implementation
+        run: |
+          set -euo pipefail
+          rm -rf jadx-out home-src
+          ./jadx/bin/jadx -d jadx-out --show-bad-code apo-4-9-0.apk >/tmp/jadx.log 2>&1 || true
+          mkdir -p home-src
+          for f in jadx-out/sources/il/ze.java jadx-out/sources/il/af.java jadx-out/sources/eb/b.java jadx-out/sources/eb/a.java; do
+            if [ -f "$f" ]; then cp "$f" home-src/$(basename $(dirname "$f"))_$(basename "$f"); fi
+          done
+          grep -RniE 'home/\{auth_data\}|background|Surface|Scaffold|LazyColumn|Color|containerColor' home-src > home-src/grep.txt || true
+          ls -l home-src
+      - name: Upload Home source
+        uses: actions/upload-artifact@v4
+        with:
+          name: APO-Stage-T-jadx-home-source
+          path: |
+            home-src/**
+            /tmp/jadx.log
+          retention-days: 7
