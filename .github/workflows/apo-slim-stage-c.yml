@@ -1,0 +1,113 @@
+name: APO Slim Stage C Minimal UI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apo-slim-stage-c.yml'
+      - 'apo-slim/**'
+      - 'apo-4-9-0.apk'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install image tool
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick
+
+      - name: Locate Android build-tools
+        id: bt
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          test -n "$SDK"
+          BT=$(find "$SDK/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)
+          test -x "$BT/zipalign"
+          test -x "$BT/apksigner"
+          echo "dir=$BT" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare placeholder and test key
+        run: |
+          convert -size 1x1 xc:none tiny.webp
+          keytool -genkeypair -keystore apo-slim-test.jks -storepass android -keypass android -alias aposlim -keyalg RSA -keysize 2048 -validity 3650 -dname "CN=APO Slim Test,O=Ruzakj,C=ID"
+          ls -lh tiny.webp
+
+      - name: Build Stage C minimal UI
+        env:
+          BT: ${{ steps.bt.outputs.dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import zipfile, os
+          src='apo-4-9-0.apk'
+          dst='APO-Slim-Stage-C-minimal-ui-unsigned.apk'
+          keep='lib/arm64-v8a/'
+          remove='lib/arm64-v8a/libjingle_peerconnection_so.so'
+          tiny=open('tiny.webp','rb').read()
+          replaced=[]
+          with zipfile.ZipFile(src,'r') as zin, zipfile.ZipFile(dst,'w') as zout:
+              for i in zin.infolist():
+                  if i.is_dir():
+                      continue
+                  n=i.filename
+                  if n.startswith('lib/') and not n.startswith(keep):
+                      continue
+                  if n == remove:
+                      continue
+                  data=zin.read(n)
+                  if n.startswith('res/') and n.lower().endswith('.webp') and i.file_size >= 100*1024:
+                      data=tiny
+                      replaced.append((n,i.file_size))
+                  ni=zipfile.ZipInfo(n, i.date_time)
+                  ni.compress_type=i.compress_type
+                  ni.comment=i.comment
+                  ni.extra=i.extra
+                  ni.internal_attr=i.internal_attr
+                  ni.external_attr=i.external_attr
+                  ni.create_system=i.create_system
+                  ni.flag_bits=i.flag_bits
+                  zout.writestr(ni,data)
+          with open('APO-Slim-Stage-C-replaced-assets.txt','w') as f:
+              total=sum(s for _,s in replaced)
+              f.write(f'Replaced large WebP resources: {len(replaced)}\n')
+              f.write(f'Original raw bytes replaced: {total}\n\n')
+              for n,s in sorted(replaced,key=lambda x:x[1],reverse=True):
+                  f.write(f'{s:12d}  {n}\n')
+          PY
+          "$BT/zipalign" -f -p 4 APO-Slim-Stage-C-minimal-ui-unsigned.apk APO-Slim-Stage-C-minimal-ui-aligned.apk
+          "$BT/apksigner" sign --ks apo-slim-test.jks --ks-key-alias aposlim --ks-pass pass:android --key-pass pass:android --out APO-Slim-Stage-C-minimal-ui.apk APO-Slim-Stage-C-minimal-ui-aligned.apk
+          "$BT/apksigner" verify --verbose APO-Slim-Stage-C-minimal-ui.apk
+
+      - name: Report
+        run: |
+          {
+            echo 'APO Slim Stage C report'
+            echo '======================='
+            stat -c 'Baseline: %s bytes  %n' apo-4-9-0.apk
+            stat -c 'Stage C:  %s bytes  %n' APO-Slim-Stage-C-minimal-ui.apk
+            echo
+            sha256sum APO-Slim-Stage-C-minimal-ui.apk
+            echo
+            cat APO-Slim-Stage-C-replaced-assets.txt
+          } | tee APO-Slim-Stage-C-report.txt
+
+      - name: Upload Stage C
+        uses: actions/upload-artifact@v4
+        with:
+          name: APO-Slim-Stage-C-minimal-ui
+          path: |
+            APO-Slim-Stage-C-minimal-ui.apk
+            APO-Slim-Stage-C-report.txt
+            APO-Slim-Stage-C-replaced-assets.txt
+          retention-days: 14
