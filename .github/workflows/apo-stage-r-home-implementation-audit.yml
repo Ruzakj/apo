@@ -1,0 +1,70 @@
+name: APO Stage R Home Implementation Audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apo-stage-r-home-implementation-audit.yml'
+      - 'apo-4-9-0.apk'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install apktool
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq apktool
+      - name: Decode and trace il/ze Home implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          apktool d -f -r apo-4-9-0.apk -o decoded
+          python3 - <<'PY' > stage-r-home-implementation.txt
+          import os,re
+          target='decoded/smali/il/ze.smali'
+          txt=open(target,encoding='utf-8',errors='ignore').read()
+          print('=== FULL il/ze ===')
+          print(txt)
+          lines=txt.splitlines()
+          # method a invoked by Home route
+          starts=[i for i,l in enumerate(lines) if l.startswith('.method') and ' a(ILcom/alfamart/apo/data/model/AuthDataPayloadResponseModel;' in l]
+          if len(starts)!=1:
+              raise SystemExit(f'expected one Home method a, got {starts}')
+          s=starts[0]
+          e=s
+          while e < len(lines) and not lines[e].startswith('.end method'): e+=1
+          block='\n'.join(lines[s:e+1])
+          print('\n=== HOME METHOD ONLY ===')
+          print(block)
+          classes=sorted(set(re.findall(r'L([^;]+);',block)))
+          print('\n=== DIRECT CLASSES FROM HOME METHOD ===')
+          for c in classes: print(c)
+          print('\n=== DIRECT CALLEE FILES WITH COMPOSE CONTAINERS ===')
+          needles=('Le2/v4;->a','Scaffold','LazyColumn','Column','Box','background','Color;','painter','Image')
+          for c in classes:
+              for base in ('decoded/smali','decoded/smali_classes2','decoded/smali_classes3'):
+                  p=f'{base}/{c}.smali'
+                  if not os.path.isfile(p): continue
+                  ls=open(p,encoding='utf-8',errors='ignore').read().splitlines()
+                  hits=[i for i,l in enumerate(ls) if any(n in l for n in needles)]
+                  if hits:
+                      print(f'\n===== {p} =====')
+                      for i in hits[:80]:
+                          print(f'[{i+1}] {ls[i]}')
+                          for j in range(max(0,i-24),min(len(ls),i+25)):
+                              print(f'{j+1:05d}: {ls[j]}')
+          PY
+          wc -l stage-r-home-implementation.txt
+      - name: Upload audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: APO-Stage-R-home-implementation-audit
+          path: stage-r-home-implementation.txt
+          retention-days: 7
