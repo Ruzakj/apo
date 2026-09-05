@@ -1,0 +1,48 @@
+name: APO Stage S Home Surface Audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apo-stage-s-home-surface-audit.yml'
+      - 'apo-4-9-0.apk'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install apktool
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq apktool
+      - name: Decode and inspect Home surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          apktool d -f -r apo-4-9-0.apk -o decoded
+          python3 - <<'PY' > stage-s-home-surfaces.txt
+          import os,re
+          for p in ['decoded/smali/il/ze.smali','decoded/smali/il/af.smali']:
+              print(f'\n===== {p} =====')
+              lines=open(p,encoding='utf-8',errors='ignore').read().splitlines()
+              for i,l in enumerate(lines):
+                  if ('Le2/v4;->a' in l or 'const-wide' in l or '0x7f06' in l or 'Lj1/c;->' in l or 'background' in l):
+                      print(f'\n### HIT {i+1}: {l}')
+                      s=max(0,i-35); e=min(len(lines),i+36)
+                      # include containing method header
+                      m=i
+                      while m>=0 and not lines[m].startswith('.method'): m-=1
+                      if m>=0: print('METHOD:',lines[m])
+                      for j in range(s,e): print(f'{j+1:05d}: {lines[j]}')
+          PY
+          wc -l stage-s-home-surfaces.txt
+      - name: Upload audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: APO-Stage-S-home-surface-audit
+          path: stage-s-home-surfaces.txt
+          retention-days: 7
