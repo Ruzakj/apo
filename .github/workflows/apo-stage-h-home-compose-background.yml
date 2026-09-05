@@ -24,9 +24,6 @@ jobs:
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq imagemagick curl
-          # Ubuntu's apktool 2.7.0 cannot round-trip modern AAPT2-generated
-          # drawable names like $avd_* and $mtrl_*. Use current upstream apktool.
-          curl -fL https://github.com/iBotPeaches/Apktool/releases/latest/download/apktool_2.11.1.jar -o apktool.jar || \
           curl -fL https://github.com/iBotPeaches/Apktool/releases/download/v2.11.1/apktool_2.11.1.jar -o apktool.jar
           java -jar apktool.jar --version
 
@@ -63,18 +60,15 @@ jobs:
           python3 - <<'PY'
           import os
           from xml.etree import ElementTree as ET
-
           manifest='decoded/AndroidManifest.xml'
           ANDROID='http://schemas.android.com/apk/res/android'
           ET.register_namespace('android', ANDROID)
           a='{%s}'%ANDROID
-
           tree=ET.parse(manifest)
           root=tree.getroot()
           app=root.find('application')
           if app is None:
               raise SystemExit('application element not found')
-
           launcher=None
           for tag in ('activity','activity-alias'):
               for node in app.findall(tag):
@@ -88,15 +82,12 @@ jobs:
                       break
               if launcher is not None:
                   break
-
           if launcher is None:
               raise SystemExit('launcher activity not found')
-
           name=launcher.get(a+'name','')
           old_theme=launcher.get(a+'theme') or app.get(a+'theme') or ''
           launcher.set(a+'theme','@style/ApoHomeBackgroundTheme')
           tree.write(manifest, encoding='utf-8', xml_declaration=True)
-
           values='decoded/res/values'
           os.makedirs(values, exist_ok=True)
           out=os.path.join(values,'apo_home_background_theme.xml')
@@ -118,14 +109,13 @@ jobs:
           print(open('stage-h-report.txt').read())
           PY
 
-      - name: Rebuild with AAPT2 and sign
+      - name: Rebuild with explicit AAPT2 and sign
         env:
           BT: ${{ steps.bt.outputs.dir }}
         shell: bash
         run: |
           set -euo pipefail
-          # Explicit AAPT2 is required for modern resource names produced by the original APK.
-          java -jar apktool.jar b --use-aapt2 -a "$BT/aapt2" decoded -o APO-Stage-H-home-background-unsigned.apk
+          java -jar apktool.jar b -a "$BT/aapt2" decoded -o APO-Stage-H-home-background-unsigned.apk
           "$BT/zipalign" -f -p 4 APO-Stage-H-home-background-unsigned.apk APO-Stage-H-home-background-aligned.apk
           keytool -genkeypair -keystore apo-stage-h.jks -storepass android -keypass android -alias apoh -keyalg RSA -keysize 2048 -validity 3650 -dname "CN=APO Stage H,O=Ruzakj,C=ID"
           "$BT/apksigner" sign --ks apo-stage-h.jks --ks-key-alias apoh --ks-pass pass:android --key-pass pass:android --out APO-Stage-H-home-background.apk APO-Stage-H-home-background-aligned.apk
