@@ -1,0 +1,85 @@
+name: APO Slim Size Audit
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'apo-4-9-0.apk'
+      - 'apo-slim/**'
+      - '.github/workflows/apo-slim-audit.yml'
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify baseline APK
+        run: |
+          test -f apo-4-9-0.apk
+          ls -lh apo-4-9-0.apk
+          sha256sum apo-4-9-0.apk | tee apo-slim/APK_SHA256.txt
+
+      - name: Run size audit
+        run: |
+          python3 apo-slim/audit_apk.py apo-4-9-0.apk --top 100 | tee apo-slim/APK_SIZE_AUDIT.txt
+
+      - name: Build slimming plan
+        run: |
+          python3 - <<'PY' | tee apo-slim/SLIMMING_PLAN.txt
+          import collections, os, zipfile
+          apk='apo-4-9-0.apk'
+          target=30*1024*1024
+          disk=os.path.getsize(apk)
+          need=max(0,disk-target)
+          abi=collections.Counter(); cat=collections.Counter(); top=[]
+          with zipfile.ZipFile(apk) as z:
+              for i in z.infolist():
+                  if i.is_dir(): continue
+                  n=i.filename; s=i.compress_size
+                  if n.startswith('lib/'):
+                      parts=n.split('/')
+                      if len(parts)>=3: abi[parts[1]]+=s
+                      cat['lib']+=s
+                  elif n.startswith('assets/'): cat['assets']+=s
+                  elif n.startswith('res/'): cat['res']+=s
+                  elif n.endswith('.dex'): cat['dex']+=s
+                  elif n=='resources.arsc': cat['resources.arsc']+=s
+                  else: cat['other']+=s
+                  top.append((s,n))
+          def mib(n): return n/1024/1024
+          print('APO Slim target analysis')
+          print('========================')
+          print(f'Baseline: {mib(disk):.2f} MiB')
+          print(f'Target:   {mib(target):.2f} MiB')
+          print(f'Required reduction: {mib(need):.2f} MiB')
+          print('\nCompressed categories:')
+          for k,v in cat.most_common(): print(f'  {k:18} {mib(v):8.2f} MiB')
+          print('\nNative ABIs:')
+          for k,v in abi.most_common(): print(f'  {k:18} {mib(v):8.2f} MiB')
+          keep='arm64-v8a'
+          removable=sum(v for k,v in abi.items() if k!=keep)
+          print(f'\nABI-only theoretical saving if keeping {keep}: {mib(removable):.2f} MiB')
+          print(f'Theoretical size after ABI-only split: {mib(disk-removable):.2f} MiB')
+          print('\nDecision gates:')
+          print('KEEP: auth/session/OTP/API/integrity/location/order/packing/ready-to-ship/confirmation/text-chat')
+          print('SAFE-CANDIDATE: non-arm64 ABI payload only if APK installation/runtime proves no dependency')
+          print('REVIEW: large media/assets, density-specific resources, voice/video/WebRTC native payload')
+          print('DO-NOT-AUTO-REMOVE: DEX, manifest, resources.arsc, signing metadata, integrity/auth-related components')
+          print('\nLargest 30 entries for manual review:')
+          for s,n in sorted(top, reverse=True)[:30]: print(f'  {mib(s):8.2f} MiB  {n}')
+          PY
+
+      - name: Upload audit reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: APO-Slim-Audit
+          path: |
+            apo-slim/APK_SHA256.txt
+            apo-slim/APK_SIZE_AUDIT.txt
+            apo-slim/SLIMMING_PLAN.txt
+          retention-days: 14
