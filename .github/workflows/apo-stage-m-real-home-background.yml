@@ -1,0 +1,215 @@
+name: APO Stage M Real Home Background
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apo-stage-m-real-home-background.yml'
+      - 'apo-4-9-0.apk'
+      - 'background/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq imagemagick curl
+          curl -fL https://github.com/iBotPeaches/Apktool/releases/download/v2.11.1/apktool_2.11.1.jar -o apktool.jar
+          java -jar apktool.jar --version
+
+      - name: Locate Android build-tools
+        id: bt
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          test -n "$SDK"
+          BT=$(find "$SDK/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)
+          test -x "$BT/aapt2"
+          test -x "$BT/zipalign"
+          test -x "$BT/apksigner"
+          cp "$BT/aapt2" ./aapt2-local
+          chmod +x ./aapt2-local
+          echo "dir=$BT" >> "$GITHUB_OUTPUT"
+          echo "aapt2=$GITHUB_WORKSPACE/aapt2-local" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare exact-screen background
+        shell: bash
+        run: |
+          set -euo pipefail
+          BG="background/file_000000007c6c8206af348f3652a79cd1.png"
+          test -f "$BG"
+          convert "$BG" -auto-orient -resize '1080x2408^' -gravity center -extent 1080x2408 -strip apo_home_bg.png
+          identify apo_home_bg.png | tee stage-m-report.txt
+
+      - name: Decode APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          java -jar apktool.jar d -f apo-4-9-0.apk -o decoded
+
+      - name: Patch MainActivity window and real Compose root Surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p decoded/res/drawable-nodpi decoded/res/values
+          cp apo_home_bg.png decoded/res/drawable-nodpi/apo_home_bg.png
+
+          python3 - <<'PY'
+          import os,re
+          from xml.etree import ElementTree as ET
+
+          manifest='decoded/AndroidManifest.xml'
+          ANDROID='http://schemas.android.com/apk/res/android'
+          a='{%s}' % ANDROID
+          ET.register_namespace('android',ANDROID)
+          tree=ET.parse(manifest)
+          root=tree.getroot(); app=root.find('application')
+          target_name='com.alfamart.apo.presentation.main.MainActivity'
+          target=None
+          for node in app.findall('activity'):
+              if node.get(a+'name') == target_name:
+                  target=node; break
+          if target is None:
+              raise SystemExit('MainActivity not found in manifest')
+          old_theme=target.get(a+'theme') or app.get(a+'theme') or ''
+          target.set(a+'theme','@style/ApoRealHomeBackgroundTheme')
+          tree.write(manifest,encoding='utf-8',xml_declaration=True)
+
+          parent = f' parent="{old_theme}"' if old_theme.startswith('@style/') else ''
+          with open('decoded/res/values/apo_real_home_background_theme.xml','w',encoding='utf-8') as f:
+              f.write('<?xml version="1.0" encoding="utf-8"?>\n<resources>\n')
+              f.write(f'  <style name="ApoRealHomeBackgroundTheme"{parent}>\n')
+              f.write('    <item name="android:windowBackground">@drawable/apo_home_bg</item>\n')
+              f.write('    <item name="android:colorBackground">@android:color/transparent</item>\n')
+              f.write('    <item name="android:windowIsTranslucent">false</item>\n')
+              f.write('  </style>\n</resources>\n')
+
+          smali_candidates=[]
+          for base,_,files in os.walk('decoded'):
+              if base.endswith('/fd') and 'b.smali' in files:
+                  smali_candidates.append(os.path.join(base,'b.smali'))
+          if len(smali_candidates)!=1:
+              raise SystemExit(f'expected one fd/b.smali, got {smali_candidates}')
+          p=smali_candidates[0]
+          txt=open(p,encoding='utf-8').read()
+
+          # MainActivity onCreate constructs fd/b with classId 0. That branch enters
+          # pswitch_1, which wraps the app in the top-level Compose Surface call:
+          # Le2/v4;->a(...). Its Kotlin default mask is 0x7e, meaning shape, color,
+          # contentColor, elevations and border are defaulted. Clear the color-default
+          # bit (0x4): 0x7e -> 0x7a, while the supplied color J argument is 0L,
+          # i.e. Compose Color.Transparent. This makes the actual app root transparent
+          # so MainActivity's image window background is visible behind Home.
+          marker='invoke-static/range {v5 .. v17}, Le2/v4;->a(Lx2/p;Le3/u0;JJFFLe1/y;Lq2/c;Li2/r;II)V'
+          pos=txt.find(marker)
+          if pos < 0:
+              raise SystemExit('top-level Surface call not found')
+          before=txt[max(0,pos-1800):pos]
+          old='const/16 v17, 0x7e'
+          if old not in before:
+              raise SystemExit('expected Surface default mask 0x7e not found near root call')
+          patched_before=before.replace(old,'const/16 v17, 0x7a',1)
+          txt=txt[:max(0,pos-1800)] + patched_before + txt[pos:]
+          open(p,'w',encoding='utf-8').write(txt)
+
+          with open('stage-m-report.txt','a',encoding='utf-8') as f:
+              f.write(f'MainActivity old theme: {old_theme}\n')
+              f.write('MainActivity new theme: @style/ApoRealHomeBackgroundTheme\n')
+              f.write(f'Compose root smali: {p}\n')
+              f.write('Root Surface mask: 0x7e -> 0x7a (explicit transparent color)\n')
+              f.write('Background drawable: @drawable/apo_home_bg\n')
+          PY
+
+      - name: Sanitize apktool generated dollar resource symbols
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os,re
+          mapping={}
+          for root,_,files in os.walk('decoded/res'):
+              for fn in files:
+                  if '$' in fn:
+                      old=os.path.join(root,fn)
+                      new=os.path.join(root,fn.replace('$','z_'))
+                      if os.path.exists(new): raise SystemExit(f'collision: {new}')
+                      mapping[old]=new
+          for old,new in mapping.items(): os.rename(old,new)
+          repl={os.path.splitext(os.path.basename(o))[0]:os.path.splitext(os.path.basename(n))[0] for o,n in mapping.items()}
+          changed=0
+          for root,_,files in os.walk('decoded/res'):
+              for fn in files:
+                  if not fn.endswith('.xml'): continue
+                  p=os.path.join(root,fn)
+                  txt=open(p,encoding='utf-8',errors='ignore').read(); orig=txt
+                  for old,new in repl.items(): txt=txt.replace(old,new)
+                  if txt != orig:
+                      open(p,'w',encoding='utf-8').write(txt); changed+=1
+          leftovers=[]
+          pat=re.compile(r'(?:name=["\']\$|@(?:drawable|mipmap)/\$)')
+          for root,_,files in os.walk('decoded/res'):
+              for fn in files:
+                  if fn.endswith('.xml'):
+                      p=os.path.join(root,fn)
+                      if pat.search(open(p,encoding='utf-8',errors='ignore').read()): leftovers.append(p)
+          with open('stage-m-report.txt','a') as f:
+              f.write(f'Sanitized dollar resource files: {len(mapping)}\nUpdated XML files: {changed}\nLeftovers: {len(leftovers)}\n')
+          if leftovers: raise SystemExit('invalid dollar resource symbols remain')
+          PY
+
+      - name: Rebuild align sign
+        env:
+          BT: ${{ steps.bt.outputs.dir }}
+          AAPT2_LOCAL: ${{ steps.bt.outputs.aapt2 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          java -jar apktool.jar b -a "$AAPT2_LOCAL" decoded -o APO-Stage-M-real-home-background-unsigned.apk
+          "$BT/zipalign" -f -p 4 APO-Stage-M-real-home-background-unsigned.apk APO-Stage-M-real-home-background-aligned.apk
+          keytool -genkeypair -keystore apo-stage-m.jks -storepass android -keypass android -alias apom -keyalg RSA -keysize 2048 -validity 3650 -dname "CN=APO Stage M,O=Ruzakj,C=ID"
+          "$BT/apksigner" sign --ks apo-stage-m.jks --ks-key-alias apom --ks-pass pass:android --key-pass pass:android --out APO-Stage-M-real-home-background.apk APO-Stage-M-real-home-background-aligned.apk
+          "$BT/apksigner" verify --verbose APO-Stage-M-real-home-background.apk | tee -a stage-m-report.txt
+          stat -c 'APK size: %s bytes' APO-Stage-M-real-home-background.apk | tee -a stage-m-report.txt
+          sha256sum APO-Stage-M-real-home-background.apk | tee -a stage-m-report.txt
+
+      - name: Structural verification of final APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf verify
+          java -jar apktool.jar d -f APO-Stage-M-real-home-background.apk -o verify >/tmp/verify-decode.log 2>&1
+          test -f verify/res/drawable-nodpi/apo_home_bg.png
+          grep -R -q 'ApoRealHomeBackgroundTheme' verify/AndroidManifest.xml
+          ROOT=$(find verify -type f -path '*/fd/b.smali' | head -n1)
+          test -n "$ROOT"
+          python3 - "$ROOT" <<'PY'
+          import sys
+          p=sys.argv[1]
+          t=open(p,encoding='utf-8').read()
+          marker='invoke-static/range {v5 .. v17}, Le2/v4;->a(Lx2/p;Le3/u0;JJFFLe1/y;Lq2/c;Li2/r;II)V'
+          pos=t.find(marker)
+          assert pos >= 0, 'Surface marker missing in rebuilt APK'
+          assert 'const/16 v17, 0x7a' in t[max(0,pos-1800):pos], 'transparent root Surface mask missing'
+          print('VERIFIED: rebuilt APK contains MainActivity background + transparent Compose root Surface')
+          PY
+          echo 'STRUCTURAL VERIFY: PASS' | tee -a stage-m-report.txt
+
+      - name: Upload Stage M
+        uses: actions/upload-artifact@v4
+        with:
+          name: APO-Stage-M-REAL-HOME-BACKGROUND
+          path: |
+            APO-Stage-M-real-home-background.apk
+            stage-m-report.txt
+          retention-days: 14
