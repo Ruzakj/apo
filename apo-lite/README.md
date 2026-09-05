@@ -47,3 +47,7 @@ APO Lite should use authorized backend interfaces for login, order state changes
 4. Implement authenticated order read/write flows against an authorized environment.
 5. Implement text-only chat.
 6. Produce an arm64-focused release APK and measure final size.
+
+## Build verification
+
+Debug build checkpoint triggered to verify the current APO Lite shell and login integration compile cleanly before further API contract work.
