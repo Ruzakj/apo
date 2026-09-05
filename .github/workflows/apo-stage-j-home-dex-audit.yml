@@ -1,0 +1,57 @@
+name: APO Stage J Home DEX Audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apo-stage-j-home-dex-audit.yml'
+      - 'apo-4-9-0.apk'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq curl unzip
+          curl -fL https://github.com/skylot/jadx/releases/download/v1.5.3/jadx-1.5.3.zip -o jadx.zip
+          unzip -q jadx.zip -d jadx
+          chmod +x jadx/bin/jadx
+          ./jadx/bin/jadx --version
+
+      - name: Decompile and locate real Home/Beranda code
+        run: |
+          set -euo pipefail
+          rm -rf jadx-out
+          ./jadx/bin/jadx -d jadx-out --show-bad-code --deobf apo-4-9-0.apk >/tmp/jadx.log 2>&1 || true
+          {
+            echo '=== HOME TEXT HITS ==='
+            grep -RniE 'Equipment Rusak|Monitoring SAPA|Operasional SAPA|Pengajuan Nomor WA|Status pengajuan POD|Scan self-service|Pesanan Siap|Dalam Pengiriman|Halo,' jadx-out/sources jadx-out/resources 2>/dev/null | head -n 800 || true
+            echo
+            echo '=== HOME / BERANDA CLASS NAMES ==='
+            find jadx-out/sources -type f \( -iname '*home*.java' -o -iname '*beranda*.java' -o -iname '*dashboard*.java' -o -iname '*main*.java' \) | head -n 300 || true
+            echo
+            echo '=== COMPOSE SURFACE / BACKGROUND HITS IN ALFAMART PACKAGE ==='
+            grep -RniE 'Surface\(|Scaffold\(|background\(|Color\.White|containerColor|MaterialTheme\.colorScheme\.background' jadx-out/sources/com/alfamart 2>/dev/null | head -n 600 || true
+            echo
+            echo '=== NAVIGATION / HOME ROUTE HITS ==='
+            grep -RniE '"home"|"beranda"|HomeRoute|BerandaRoute|HomeScreen|BerandaScreen|DashboardScreen' jadx-out/sources/com/alfamart 2>/dev/null | head -n 600 || true
+          } | tee stage-j-home-audit.txt
+
+      - name: Upload audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: APO-Stage-J-home-dex-audit
+          path: |
+            stage-j-home-audit.txt
+            /tmp/jadx.log
+          retention-days: 7
