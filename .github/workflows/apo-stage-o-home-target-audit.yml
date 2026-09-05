@@ -1,0 +1,137 @@
+name: APO Stage O Exact Home Target Audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apo-stage-o-home-target-audit.yml'
+      - 'apo-4-9-0.apk'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install apktool
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq apktool
+
+      - name: Decode APK
+        run: |
+          set -euo pipefail
+          apktool d -f -r apo-4-9-0.apk -o decoded
+
+      - name: Resolve exact Home route implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os,re
+          needle='home/{auth_data}?callback_url={callback_url}'
+          out=[]
+          refs=[]
+          for root,_,files in os.walk('decoded'):
+              if '/smali' not in root: continue
+              for fn in files:
+                  if not fn.endswith('.smali'): continue
+                  p=os.path.join(root,fn)
+                  lines=open(p,encoding='utf-8',errors='ignore').read().splitlines()
+                  for i,l in enumerate(lines):
+                      if needle in l:
+                          refs.append((p,i,lines))
+          out.append(f'ROUTE REFS: {len(refs)}')
+          for p,i,lines in refs:
+              out.append(f'\n===== ROUTE REF {p}:{i+1} =====')
+              # determine containing method
+              start=i
+              while start>=0 and not lines[start].lstrip().startswith('.method'):
+                  start-=1
+              end=i
+              while end<len(lines) and not lines[end].lstrip().startswith('.end method'):
+                  end+=1
+              out.append(f'METHOD: {lines[start].strip() if start>=0 else "UNKNOWN"}')
+              for j in range(max(start, i-180), min(end+1, i+260)):
+                  out.append(f'{j+1:05d}: {lines[j]}')
+
+          # Find every class directly referenced from the route-containing methods.
+          classes=set()
+          invokes=[]
+          for p,i,lines in refs:
+              start=i
+              while start>=0 and not lines[start].lstrip().startswith('.method'): start-=1
+              end=i
+              while end<len(lines) and not lines[end].lstrip().startswith('.end method'): end+=1
+              block='\n'.join(lines[max(0,start):min(len(lines),end+1)])
+              for m in re.finditer(r'L([^;]+);', block): classes.add(m.group(1))
+              for ln in lines[max(0,start):min(len(lines),end+1)]:
+                  if 'invoke-' in ln: invokes.append((p,ln.strip()))
+
+          out.append('\n===== DIRECTLY REFERENCED CLASSES =====')
+          for c in sorted(classes): out.append(c)
+          out.append('\n===== INVOKES INSIDE ROUTE METHODS =====')
+          for p,ln in invokes: out.append(f'{p}: {ln}')
+
+          # Rank candidate files containing Compose container calls and APO-home-ish symbols.
+          patterns=(
+              'Le2/v4;->a',      # Surface from prior reverse trace
+              'Scaffold', 'Surface', 'Box', 'Column', 'LazyColumn',
+              'home', 'Home', 'auth_data', 'callback_url'
+          )
+          scored=[]
+          for root,_,files in os.walk('decoded'):
+              if '/smali' not in root: continue
+              for fn in files:
+                  if not fn.endswith('.smali'): continue
+                  p=os.path.join(root,fn)
+                  txt=open(p,encoding='utf-8',errors='ignore').read()
+                  score=sum(txt.count(x) for x in patterns)
+                  if score:
+                      # favor classes referenced by route methods
+                      rel=p.split('/smali',1)[-1]
+                      rel=rel.split('/',1)[-1].rsplit('.smali',1)[0]
+                      if rel in classes: score += 100
+                      if 'com/alfamart/apo' in p: score += 50
+                      scored.append((score,p))
+          scored=sorted(scored,reverse=True)[:120]
+          out.append('\n===== RANKED HOME/COMPOSE CANDIDATES =====')
+          for s,p in scored: out.append(f'{s:4d} {p}')
+
+          # Dump compact context for Surface/Scaffold-like calls in top route-linked candidates.
+          route_linked=[]
+          for c in classes:
+              for prefix in ('decoded/smali','decoded/smali_classes2','decoded/smali_classes3'):
+                  p=f'{prefix}/{c}.smali'
+                  if os.path.isfile(p): route_linked.append(p)
+          out.append('\n===== CONTAINER CALLS IN ROUTE-LINKED CLASSES =====')
+          for p in sorted(set(route_linked)):
+              lines=open(p,encoding='utf-8',errors='ignore').read().splitlines()
+              hits=[]
+              for i,l in enumerate(lines):
+                  if any(x in l for x in ('Le2/v4;->a','Scaffold','Surface','Box','LazyColumn','Column')):
+                      hits.append(i)
+              if not hits: continue
+              out.append(f'\n--- {p} ---')
+              for i in hits[:40]:
+                  out.append(f'[{i+1}] {lines[i]}')
+                  for j in range(max(0,i-18), min(len(lines),i+19)):
+                      out.append(f'{j+1:05d}: {lines[j]}')
+
+          open('stage-o-home-target-audit.txt','w',encoding='utf-8').write('\n'.join(out)+'\n')
+          print('\n'.join(out[-250:]))
+          if len(refs) < 1:
+              raise SystemExit('Home route not found')
+          PY
+
+      - name: Upload exact target audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: APO-Stage-O-exact-home-target-audit
+          path: stage-o-home-target-audit.txt
+          retention-days: 7
