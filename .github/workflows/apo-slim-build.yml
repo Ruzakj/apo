@@ -1,0 +1,161 @@
+name: APO Slim Build
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'apo-4-9-0.apk'
+      - 'apo-slim/**'
+      - '.github/workflows/apo-slim-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Locate Android build-tools
+        id: bt
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          test -n "$SDK"
+          BT=$(find "$SDK/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)
+          test -x "$BT/zipalign"
+          test -x "$BT/apksigner"
+          echo "dir=$BT" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare test keystore
+        shell: bash
+        run: |
+          set -euo pipefail
+          keytool -genkeypair \
+            -keystore apo-slim-test.jks \
+            -storepass android \
+            -keypass android \
+            -alias aposlim \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 3650 \
+            -dname "CN=APO Slim Test,O=Ruzakj,C=ID"
+
+      - name: Build Stage A arm64-only
+        shell: bash
+        env:
+          BT: ${{ steps.bt.outputs.dir }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import zipfile
+          src='apo-4-9-0.apk'
+          dst='APO-Slim-Stage-A-arm64-unsigned.apk'
+          keep='lib/arm64-v8a/'
+          with zipfile.ZipFile(src,'r') as zin, zipfile.ZipFile(dst,'w') as zout:
+              for i in zin.infolist():
+                  n=i.filename
+                  if n.startswith('lib/') and not n.startswith(keep):
+                      continue
+                  data=zin.read(n)
+                  ni=zipfile.ZipInfo(n, i.date_time)
+                  ni.compress_type=i.compress_type
+                  ni.comment=i.comment
+                  ni.extra=i.extra
+                  ni.internal_attr=i.internal_attr
+                  ni.external_attr=i.external_attr
+                  ni.create_system=i.create_system
+                  ni.flag_bits=i.flag_bits
+                  zout.writestr(ni,data)
+          PY
+          "$BT/zipalign" -f -p 4 APO-Slim-Stage-A-arm64-unsigned.apk APO-Slim-Stage-A-arm64-aligned.apk
+          "$BT/apksigner" sign \
+            --ks apo-slim-test.jks \
+            --ks-key-alias aposlim \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --out APO-Slim-Stage-A-arm64.apk \
+            APO-Slim-Stage-A-arm64-aligned.apk
+          "$BT/apksigner" verify --verbose APO-Slim-Stage-A-arm64.apk
+
+      - name: Build Stage B arm64-only without WebRTC
+        shell: bash
+        env:
+          BT: ${{ steps.bt.outputs.dir }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import zipfile
+          src='apo-4-9-0.apk'
+          dst='APO-Slim-Stage-B-arm64-no-webrtc-unsigned.apk'
+          keep='lib/arm64-v8a/'
+          remove='lib/arm64-v8a/libjingle_peerconnection_so.so'
+          with zipfile.ZipFile(src,'r') as zin, zipfile.ZipFile(dst,'w') as zout:
+              for i in zin.infolist():
+                  n=i.filename
+                  if n.startswith('lib/') and not n.startswith(keep):
+                      continue
+                  if n == remove:
+                      continue
+                  data=zin.read(n)
+                  ni=zipfile.ZipInfo(n, i.date_time)
+                  ni.compress_type=i.compress_type
+                  ni.comment=i.comment
+                  ni.extra=i.extra
+                  ni.internal_attr=i.internal_attr
+                  ni.external_attr=i.external_attr
+                  ni.create_system=i.create_system
+                  ni.flag_bits=i.flag_bits
+                  zout.writestr(ni,data)
+          PY
+          "$BT/zipalign" -f -p 4 APO-Slim-Stage-B-arm64-no-webrtc-unsigned.apk APO-Slim-Stage-B-arm64-no-webrtc-aligned.apk
+          "$BT/apksigner" sign \
+            --ks apo-slim-test.jks \
+            --ks-key-alias aposlim \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --out APO-Slim-Stage-B-arm64-no-webrtc.apk \
+            APO-Slim-Stage-B-arm64-no-webrtc-aligned.apk
+          "$BT/apksigner" verify --verbose APO-Slim-Stage-B-arm64-no-webrtc.apk
+
+      - name: Report sizes and contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo 'APO Slim build report'
+            echo '====================='
+            stat -c 'Baseline: %s bytes  %n' apo-4-9-0.apk
+            stat -c 'Stage A:  %s bytes  %n' APO-Slim-Stage-A-arm64.apk
+            stat -c 'Stage B:  %s bytes  %n' APO-Slim-Stage-B-arm64-no-webrtc.apk
+            echo
+            sha256sum apo-4-9-0.apk APO-Slim-Stage-A-arm64.apk APO-Slim-Stage-B-arm64-no-webrtc.apk
+            echo
+            echo 'Stage A native libraries:'
+            unzip -l APO-Slim-Stage-A-arm64.apk 'lib/*' | sed -n '/lib\//p'
+            echo
+            echo 'Stage B native libraries:'
+            unzip -l APO-Slim-Stage-B-arm64-no-webrtc.apk 'lib/*' | sed -n '/lib\//p'
+          } | tee APO-Slim-BUILD-REPORT.txt
+
+      - name: Upload Stage A
+        uses: actions/upload-artifact@v4
+        with:
+          name: APO-Slim-Stage-A-arm64
+          path: |
+            APO-Slim-Stage-A-arm64.apk
+            APO-Slim-BUILD-REPORT.txt
+          retention-days: 14
+
+      - name: Upload Stage B
+        uses: actions/upload-artifact@v4
+        with:
+          name: APO-Slim-Stage-B-arm64-no-webrtc
+          path: |
+            APO-Slim-Stage-B-arm64-no-webrtc.apk
+            APO-Slim-BUILD-REPORT.txt
+          retention-days: 14
