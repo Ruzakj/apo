@@ -35,25 +35,19 @@ jobs:
           SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
           test -n "$SDK"
           BT=$(find "$SDK/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)
-          test -x "$BT/aapt2"
-          test -x "$BT/zipalign"
-          test -x "$BT/apksigner"
           cp "$BT/aapt2" ./aapt2-local
           chmod +x ./aapt2-local
           echo "dir=$BT" >> "$GITHUB_OUTPUT"
           echo "aapt2=$GITHUB_WORKSPACE/aapt2-local" >> "$GITHUB_OUTPUT"
 
       - name: Prepare background
-        shell: bash
         run: |
           set -euo pipefail
           BG="background/file_000000007c6c8206af348f3652a79cd1.png"
           test -f "$BG"
           convert "$BG" -auto-orient -resize '1080x2408^' -gravity center -extent 1080x2408 -strip apo_home_bg.png
-          identify apo_home_bg.png
 
-      - name: Decode and patch launcher activity theme
-        shell: bash
+      - name: Decode and patch launcher theme
         run: |
           set -euo pipefail
           java -jar apktool.jar d -f apo-4-9-0.apk -o decoded
@@ -64,81 +58,76 @@ jobs:
           from xml.etree import ElementTree as ET
           manifest='decoded/AndroidManifest.xml'
           ANDROID='http://schemas.android.com/apk/res/android'
-          ET.register_namespace('android', ANDROID)
+          ET.register_namespace('android',ANDROID)
           a='{%s}'%ANDROID
-          tree=ET.parse(manifest)
-          root=tree.getroot()
-          app=root.find('application')
+          tree=ET.parse(manifest); root=tree.getroot(); app=root.find('application')
           launcher=None
           for node in app.findall('activity'):
               for f in node.findall('intent-filter'):
                   actions={x.get(a+'name','') for x in f.findall('action')}
                   cats={x.get(a+'name','') for x in f.findall('category')}
                   if 'android.intent.action.MAIN' in actions and 'android.intent.category.LAUNCHER' in cats:
-                      launcher=node
-                      break
-              if launcher is not None:
-                  break
-          if launcher is None:
-              raise SystemExit('launcher activity not found')
+                      launcher=node; break
+              if launcher is not None: break
+          if launcher is None: raise SystemExit('launcher activity not found')
           old_theme=launcher.get(a+'theme') or app.get(a+'theme') or ''
           launcher.set(a+'theme','@style/ApoHomeBackgroundTheme')
-          tree.write(manifest, encoding='utf-8', xml_declaration=True)
-          parent_attr=f' parent="{old_theme}"' if old_theme.startswith('@style/') else ''
+          tree.write(manifest,encoding='utf-8',xml_declaration=True)
           os.makedirs('decoded/res/values',exist_ok=True)
+          parent=f' parent="{old_theme}"' if old_theme.startswith('@style/') else ''
           open('decoded/res/values/apo_home_background_theme.xml','w',encoding='utf-8').write(
-              '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n'
-              f'  <style name="ApoHomeBackgroundTheme"{parent_attr}>\n'
-              '    <item name="android:windowBackground">@drawable/apo_home_bg</item>\n'
-              '    <item name="android:windowIsTranslucent">false</item>\n'
-              '    <item name="android:colorBackground">@android:color/transparent</item>\n'
-              '  </style>\n</resources>\n')
-          open('stage-h-report.txt','w',encoding='utf-8').write(
-              f'Launcher activity: {launcher.get(a+"name")}\nOriginal theme: {old_theme}\nBackground: @drawable/apo_home_bg\n')
+            '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n'
+            f'<style name="ApoHomeBackgroundTheme"{parent}>\n'
+            '<item name="android:windowBackground">@drawable/apo_home_bg</item>\n'
+            '<item name="android:windowIsTranslucent">false</item>\n'
+            '<item name="android:colorBackground">@android:color/transparent</item>\n'
+            '</style>\n</resources>\n')
+          open('stage-h-report.txt','w').write(f'Launcher: {launcher.get(a+"name")}\nOriginal theme: {old_theme}\n')
           PY
 
-      - name: Sanitize generated drawable names
-        shell: bash
+      - name: Sanitize invalid resource symbols
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import os
+          import os,re
           mapping={}
-          for root, dirs, files in os.walk('decoded/res'):
+          for root,_,files in os.walk('decoded/res'):
               for fn in files:
                   if '$' in fn:
                       old=os.path.join(root,fn)
                       new=os.path.join(root,fn.replace('$','z_'))
-                      if os.path.exists(new):
-                          raise SystemExit(f'collision: {new}')
                       mapping[old]=new
           for old,new in mapping.items():
               os.rename(old,new)
           repl={os.path.splitext(os.path.basename(o))[0]:os.path.splitext(os.path.basename(n))[0] for o,n in mapping.items()}
           changed=0
-          for root, dirs, files in os.walk('decoded/res'):
+          for root,_,files in os.walk('decoded/res'):
               for fn in files:
-                  if not fn.endswith('.xml'):
-                      continue
+                  if not fn.endswith('.xml'): continue
                   p=os.path.join(root,fn)
-                  txt=open(p,encoding='utf-8',errors='ignore').read()
-                  orig=txt
-                  for a,b in repl.items():
-                      txt=txt.replace('@drawable/'+a,'@drawable/'+b)
-                      txt=txt.replace('@mipmap/'+a,'@mipmap/'+b)
-                  if txt != orig:
-                      open(p,'w',encoding='utf-8').write(txt)
-                      changed += 1
-          with open('stage-h-report.txt','a',encoding='utf-8') as f:
-              f.write(f'Sanitized drawable files: {len(mapping)}\nXML files updated: {changed}\n')
-          print(f'sanitized {len(mapping)} drawable files; updated {changed} XML files')
+                  txt=open(p,encoding='utf-8',errors='ignore').read(); orig=txt
+                  for old,new in repl.items():
+                      txt=txt.replace(old,new)
+                  if txt!=orig:
+                      open(p,'w',encoding='utf-8').write(txt); changed+=1
+          leftovers=[]
+          pat=re.compile(r'(?:name=["\']\$|@(?:drawable|mipmap)/\$)')
+          for root,_,files in os.walk('decoded/res'):
+              for fn in files:
+                  if not fn.endswith('.xml'): continue
+                  p=os.path.join(root,fn)
+                  t=open(p,encoding='utf-8',errors='ignore').read()
+                  if pat.search(t): leftovers.append(p)
+          with open('stage-h-report.txt','a') as f:
+              f.write(f'Sanitized files: {len(mapping)}\nUpdated XML: {changed}\nLeftover invalid XML: {len(leftovers)}\n')
+          if leftovers:
+              print('\n'.join(leftovers[:50])); raise SystemExit('invalid dollar resource symbols remain')
           PY
 
-      - name: Rebuild with local AAPT2 and sign
+      - name: Rebuild and sign
         env:
           BT: ${{ steps.bt.outputs.dir }}
           AAPT2_LOCAL: ${{ steps.bt.outputs.aapt2 }}
-        shell: bash
         run: |
           set -euo pipefail
           java -jar apktool.jar b -a "$AAPT2_LOCAL" decoded -o APO-Stage-H-home-background-unsigned.apk
