@@ -1,0 +1,58 @@
+name: APO Stage N Home Route Audit
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install apktool
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq apktool
+      - name: Decode and trace Home route
+        shell: bash
+        run: |
+          set -euo pipefail
+          apktool d -f -r apo-4-9-0.apk -o decoded
+          : > home-route-audit.txt
+          echo '=== direct home route references ===' >> home-route-audit.txt
+          grep -RniF 'home/{auth_data}?callback_url={callback_url}' decoded/smali* 2>/dev/null | tee -a home-route-audit.txt || true
+          echo >> home-route-audit.txt
+          echo '=== likely navigation/composable calls around home route ===' >> home-route-audit.txt
+          python3 - <<'PY'
+          import os,re
+          needle='home/{auth_data}?callback_url={callback_url}'
+          out=open('home-route-audit.txt','a',encoding='utf-8')
+          for root,_,files in os.walk('decoded'):
+              if not '/smali' in root: continue
+              for fn in files:
+                  if not fn.endswith('.smali'): continue
+                  p=os.path.join(root,fn)
+                  try: lines=open(p,encoding='utf-8',errors='ignore').read().splitlines()
+                  except: continue
+                  for i,l in enumerate(lines):
+                      if needle in l:
+                          out.write(f'\n--- {p}:{i+1} ---\n')
+                          for j in range(max(0,i-120),min(len(lines),i+220)):
+                              out.write(f'{j+1:05d}: {lines[j]}\n')
+          out.close()
+          PY
+          echo >> home-route-audit.txt
+          echo '=== Home-related package/class candidates ===' >> home-route-audit.txt
+          grep -RniE 'presentation/.{0,80}home|/home/|HomeScreen|HomeActivity|HomeFragment|HomeViewModel|homeScreen|homeRoute' decoded/smali* 2>/dev/null | head -n 4000 | tee -a home-route-audit.txt || true
+          echo >> home-route-audit.txt
+          echo '=== Compose image/background calls in APO presentation code ===' >> home-route-audit.txt
+          grep -RniE 'painterResource|ImageKt|AsyncImage|background|SurfaceKt|ScaffoldKt|BoxKt' decoded/smali*/com/alfamart/apo/presentation 2>/dev/null | head -n 4000 | tee -a home-route-audit.txt || true
+      - name: Upload audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: APO-Stage-N-home-route-audit
+          path: home-route-audit.txt
+          retention-days: 7
