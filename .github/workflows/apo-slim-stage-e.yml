@@ -53,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import zipfile, os
+          import zipfile, os, re
 
           src='apo-4-9-0.apk'
           dst='APO-Slim-Stage-E-visual-stripped-unsigned.apk'
@@ -69,8 +69,19 @@ jobs:
               '.mp3': open('tiny.mp3','rb').read(),
           }
 
+          # Launcher/adaptive icons must remain valid. Stage E v1 replaced these too,
+          # which can make PackageManager reject or render the package incorrectly.
+          def critical_raster(path):
+              p=path.lower()
+              base=os.path.basename(p)
+              if re.match(r'res/mipmap[^/]*/', p):
+                  return True
+              keys=('launcher','app_icon','ic_app','apo_icon','logo_apo')
+              return any(k in base for k in keys)
+
           replaced=[]
           removed=[]
+          preserved_critical=[]
           kept_barcode=[]
           with zipfile.ZipFile(src,'r') as zin, zipfile.ZipFile(dst,'w',allowZip64=True) as zout:
               for i in zin.infolist():
@@ -95,11 +106,13 @@ jobs:
                   data=zin.read(n)
                   ext=os.path.splitext(low)[1]
 
-                  # Strip ALL raster UI resources, regardless of size, but keep resource paths alive.
                   if n.startswith('res/') and ext in ('.webp','.png','.jpg','.jpeg','.gif'):
-                      old=i.file_size
-                      data=tiny[ext]
-                      replaced.append((n,old,len(data),'raster-all'))
+                      if critical_raster(n):
+                          preserved_critical.append((n,i.file_size))
+                      else:
+                          old=i.file_size
+                          data=tiny[ext]
+                          replaced.append((n,old,len(data),'raster-ui'))
                   elif ext == '.mp3':
                       old=i.file_size
                       data=tiny['.mp3']
@@ -116,13 +129,17 @@ jobs:
                   zout.writestr(ni,data)
 
           with open('APO-Slim-Stage-E-report-details.txt','w') as f:
-              f.write('Stage E Visual Stripped details\n')
-              f.write('===============================\n')
+              f.write('Stage E Visual Stripped - launcher-safe revision\n')
+              f.write('================================================\n')
               f.write(f'Replaced entries: {len(replaced)}\n')
               f.write(f'Removed entries: {len(removed)}\n')
+              f.write(f'Preserved critical icon entries: {len(preserved_critical)}\n')
               f.write(f'Original bytes neutralized: {sum(x[1] for x in replaced)}\n')
               f.write(f'Bytes removed: {sum(x[1] for x in removed)}\n\n')
-              f.write('BARCODE-RELATED ENTRIES PRESERVED:\n')
+              f.write('CRITICAL ICON/LAUNCHER RESOURCES PRESERVED:\n')
+              for n,s in sorted(preserved_critical,key=lambda x:x[1],reverse=True):
+                  f.write(f'{s:12d}  {n}\n')
+              f.write('\nBARCODE-RELATED ENTRIES PRESERVED:\n')
               for n,s in sorted(kept_barcode,key=lambda x:x[1],reverse=True):
                   f.write(f'{s:12d}  {n}\n')
               f.write('\nREPLACED (top 150):\n')
@@ -140,20 +157,20 @@ jobs:
       - name: Report
         run: |
           {
-            echo 'APO Slim Stage E Visual Stripped'
-            echo '================================'
+            echo 'APO Slim Stage E Visual Stripped - launcher-safe'
+            echo '================================================'
             stat -c 'Baseline: %s bytes  %n' apo-4-9-0.apk
             stat -c 'Stage E:  %s bytes  %n' APO-Slim-Stage-E-visual-stripped.apk
             echo
             sha256sum APO-Slim-Stage-E-visual-stripped.apk
             echo
-            head -n 220 APO-Slim-Stage-E-report-details.txt
+            head -n 240 APO-Slim-Stage-E-report-details.txt
           } | tee APO-Slim-Stage-E-report.txt
 
       - name: Upload Stage E
         uses: actions/upload-artifact@v4
         with:
-          name: APO-Slim-Stage-E-visual-stripped
+          name: APO-Slim-Stage-E-visual-stripped-launcher-safe
           path: |
             APO-Slim-Stage-E-visual-stripped.apk
             APO-Slim-Stage-E-report.txt
