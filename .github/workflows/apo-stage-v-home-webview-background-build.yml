@@ -39,7 +39,7 @@ jobs:
       - name: Prepare background
         run: |
           set -euo pipefail
-          BG="background/file_000000007c6c8206af348f3652a79cd1.png"
+          BG="background/apo_new_bg.jpg"
           test -f "$BG"
           convert "$BG" -auto-orient -resize '1080x2408^' -gravity center -extent 1080x2408 -strip apo_home_bg.png
           identify apo_home_bg.png | tee stage-v-report.txt
@@ -154,13 +154,13 @@ jobs:
           java -jar apktool.jar b -a "$AAPT2_LOCAL" decoded -o unsigned.apk
           "$BT/zipalign" -f -p 4 unsigned.apk aligned.apk
           keytool -genkeypair -keystore key.jks -storepass android -keypass android -alias apo -keyalg RSA -keysize 2048 -validity 3650 -dname "CN=APO Glass,O=Ruzakj,C=ID"
-          "$BT/apksigner" sign --ks key.jks --ks-key-alias apo --ks-pass pass:android --key-pass pass:android --out APO-Stage-V4-READABLE-GLASS-HOME.apk aligned.apk
-          "$BT/apksigner" verify --verbose APO-Stage-V4-READABLE-GLASS-HOME.apk | tee -a stage-v-report.txt
-          sha256sum APO-Stage-V4-READABLE-GLASS-HOME.apk | tee -a stage-v-report.txt
+          "$BT/apksigner" sign --ks key.jks --ks-key-alias apo --ks-pass pass:android --key-pass pass:android --out APO-Stage-V5-NEW-BG-READABLE-GLASS.apk aligned.apk
+          "$BT/apksigner" verify --verbose APO-Stage-V5-NEW-BG-READABLE-GLASS.apk | tee -a stage-v-report.txt
+          sha256sum APO-Stage-V5-NEW-BG-READABLE-GLASS.apk | tee -a stage-v-report.txt
 
       - name: Verify
         run: |
-          rm -rf verify; java -jar apktool.jar d -f APO-Stage-V4-READABLE-GLASS-HOME.apk -o verify >/dev/null 2>&1
+          rm -rf verify; java -jar apktool.jar d -f APO-Stage-V5-NEW-BG-READABLE-GLASS.apk -o verify >/dev/null 2>&1
           test -f verify/res/drawable-nodpi/apo_home_bg.png
           grep -R -q 'HomeBackgroundInjector;->apply' verify/smali*/il/ze.smali
           grep -q '__apoReadableGlass' verify/smali/com/ric/apopatch/HomeBackgroundInjector.smali
@@ -169,8 +169,8 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: APO-Stage-V4-READABLE-GLASS-HOME
+          name: APO-Stage-V5-NEW-BG-READABLE-GLASS
           path: |
-            APO-Stage-V4-READABLE-GLASS-HOME.apk
+            APO-Stage-V5-NEW-BG-READABLE-GLASS.apk
             stage-v-report.txt
           retention-days: 14
