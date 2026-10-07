@@ -152,11 +152,11 @@ jobs:
               move-result-object v0
               check-cast v0, Landroid/os/PowerManager;
               if-eqz v0, :done
-              const v1, 0x1000000a
+              const v1, 0x3000001a
               const-string v2, "apo:incoming-order"
               invoke-virtual {v0, v1, v2}, Landroid/os/PowerManager;->newWakeLock(ILjava/lang/String;)Landroid/os/PowerManager$WakeLock;
               move-result-object v0
-              const-wide/16 v1, 0x1388
+              const-wide/16 v1, 0x2710
               invoke-virtual {v0, v1, v2}, Landroid/os/PowerManager$WakeLock;->acquire(J)V
           :done
               return-void
@@ -211,13 +211,13 @@ jobs:
           java -jar apktool.jar b -a "$AAPT2_LOCAL" decoded -o unsigned.apk
           "$BT/zipalign" -f -p 4 unsigned.apk aligned.apk
           keytool -genkeypair -keystore key.jks -storepass android -keypass android -alias apo -keyalg RSA -keysize 2048 -validity 3650 -dname "CN=APO Glass,O=Ruzakj,C=ID"
-          "$BT/apksigner" sign --ks key.jks --ks-key-alias apo --ks-pass pass:android --key-pass pass:android --out APO-Stage-V10-GLOBAL-READABILITY.apk aligned.apk
-          "$BT/apksigner" verify --verbose APO-Stage-V10-GLOBAL-READABILITY.apk | tee -a stage-v-report.txt
-          sha256sum APO-Stage-V10-GLOBAL-READABILITY.apk | tee -a stage-v-report.txt
+          "$BT/apksigner" sign --ks key.jks --ks-key-alias apo --ks-pass pass:android --key-pass pass:android --out APO-Stage-V11-GLOBAL-READABILITY-LOCKED-NOTIFY.apk aligned.apk
+          "$BT/apksigner" verify --verbose APO-Stage-V11-GLOBAL-READABILITY-LOCKED-NOTIFY.apk | tee -a stage-v-report.txt
+          sha256sum APO-Stage-V11-GLOBAL-READABILITY-LOCKED-NOTIFY.apk | tee -a stage-v-report.txt
 
       - name: Verify
         run: |
-          rm -rf verify; java -jar apktool.jar d -f APO-Stage-V10-GLOBAL-READABILITY.apk -o verify >/dev/null 2>&1
+          rm -rf verify; java -jar apktool.jar d -f APO-Stage-V11-GLOBAL-READABILITY-LOCKED-NOTIFY.apk -o verify >/dev/null 2>&1
           test -f verify/res/drawable-nodpi/apo_home_bg.png
           grep -R -q 'HomeBackgroundInjector;->apply' verify/smali*/il/ze.smali
           grep -q '__apoReadableGlass' verify/smali/com/ric/apopatch/HomeBackgroundInjector.smali
@@ -226,9 +226,9 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: APO-Stage-V10-GLOBAL-READABILITY
+          name: APO-Stage-V11-GLOBAL-READABILITY-LOCKED-NOTIFY
           path: |
-            APO-Stage-V10-GLOBAL-READABILITY.apk
+            APO-Stage-V11-GLOBAL-READABILITY-LOCKED-NOTIFY.apk
             stage-v-report.txt
             notification-patch.txt
           retention-days: 14
