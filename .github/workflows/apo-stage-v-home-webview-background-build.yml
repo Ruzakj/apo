@@ -99,7 +99,7 @@ jobs:
               if-eqz v0, :done
               const/4 v1, 0x0
               invoke-virtual {v0, v1}, Landroid/webkit/WebView;->setBackgroundColor(I)V
-              const-string v1, "javascript:(function(){try{function n(c){return(c||'').replace(/\\s/g,'').toLowerCase()}function pale(c){c=n(c);var m=c.match(/rgba?\\((\\d+),(\\d+),(\\d+)/);return m&&+m[1]>235&&+m[2]>235&&+m[3]>235}function go(){var d=document.documentElement,b=document.body;if(!b)return;var w=Math.max(d.clientWidth,innerWidth||0),h=Math.max(d.clientHeight,innerHeight||0);[d,b,document.querySelector('#root'),document.querySelector('#app'),document.querySelector('main'),document.querySelector('body>div:first-child')].filter(Boolean).forEach(function(e){e.style.setProperty('background','transparent','important');e.style.setProperty('min-height','100vh','important')});document.querySelectorAll('div,section,main,article').forEach(function(e){var r=e.getBoundingClientRect(),cs=getComputedStyle(e);if(r.width>=w*.84&&r.height>=h*.10&&pale(cs.backgroundColor)){e.style.setProperty('background','transparent','important');e.style.setProperty('box-shadow','none','important')}else if(r.width>=w*.27&&r.width<w*.84&&r.height>=42&&pale(cs.backgroundColor)){e.style.setProperty('background','rgba(10,12,16,.82)','important');e.style.setProperty('border','1px solid rgba(255,255,255,.55)','important');e.style.setProperty('box-shadow','0 8px 24px rgba(0,0,0,.32)','important');e.style.setProperty('backdrop-filter','blur(10px)','important')}});document.querySelectorAll('h1,h2,h3,h4,h5,h6,p,span,label').forEach(function(e){var r=e.getBoundingClientRect();if(r.top>h*.34){e.style.setProperty('color','rgba(255,255,255,.98)','important');e.style.setProperty('text-shadow','0 2px 5px rgba(0,0,0,.95)','important')}});document.querySelectorAll('nav,[role=navigation],footer').forEach(function(e){var r=e.getBoundingClientRect();if(r.width>=w*.8){e.style.setProperty('background','rgba(250,250,252,.92)','important');e.style.setProperty('backdrop-filter','blur(14px)','important');e.querySelectorAll('span,p,label').forEach(function(t){t.style.setProperty('color','#25252a','important');t.style.setProperty('text-shadow','none','important')})}})}go();if(!window.__apoReadableGlass&&document.body){window.__apoReadableGlass=new MutationObserver(go);window.__apoReadableGlass.observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['class','style']})}}catch(e){}})();"
+              const-string v1, "javascript:(function(){try{function n(c){return(c||'').replace(/\\s/g,'').toLowerCase()}function pale(c){c=n(c);var m=c.match(/rgba?\\((\\d+),(\\d+),(\\d+)/);return m&&+m[1]>235&&+m[2]>235&&+m[3]>235}function go(){var d=document.documentElement,b=document.body;if(!b)return;var w=Math.max(d.clientWidth,innerWidth||0),h=Math.max(d.clientHeight,innerHeight||0);[d,b,document.querySelector('#root'),document.querySelector('#app'),document.querySelector('main'),document.querySelector('body>div:first-child')].filter(Boolean).forEach(function(e){e.style.setProperty('background','transparent','important');e.style.setProperty('min-height','100vh','important')});document.querySelectorAll('div,section,main,article').forEach(function(e){var r=e.getBoundingClientRect(),cs=getComputedStyle(e);if(r.width>=w*.84&&r.height>=h*.10&&pale(cs.backgroundColor)){e.style.setProperty('background','transparent','important');e.style.setProperty('box-shadow','none','important')}else if(r.width>=w*.27&&r.width<w*.84&&r.height>=42&&pale(cs.backgroundColor)){e.style.setProperty('background','rgba(10,12,16,.82)','important');e.style.setProperty('border','1px solid rgba(255,255,255,.55)','important');e.style.setProperty('box-shadow','0 8px 24px rgba(0,0,0,.32)','important');e.style.setProperty('backdrop-filter','blur(10px)','important')}});document.querySelectorAll('h1,h2,h3,h4,h5,h6,p,span,label').forEach(function(e){var r=e.getBoundingClientRect();if(r.top>h*.34){var host=e.closest('div,section,article,li');var hc=host?getComputedStyle(host).backgroundColor:'';if(pale(hc)){e.style.setProperty('color','#202126','important');e.style.setProperty('text-shadow','none','important')}else{e.style.setProperty('color','rgba(255,255,255,.98)','important');e.style.setProperty('text-shadow','0 2px 5px rgba(0,0,0,.95)','important')}}});document.querySelectorAll('input,textarea').forEach(function(e){e.style.setProperty('color','#202126','important');e.style.setProperty('background','rgba(255,255,255,.94)','important');e.style.setProperty('text-shadow','none','important')});document.querySelectorAll('nav,[role=navigation],footer').forEach(function(e){var r=e.getBoundingClientRect();if(r.width>=w*.8){e.style.setProperty('background','rgba(250,250,252,.92)','important');e.style.setProperty('backdrop-filter','blur(14px)','important');e.querySelectorAll('span,p,label').forEach(function(t){t.style.setProperty('color','#25252a','important');t.style.setProperty('text-shadow','none','important')})}})}go();if(!window.__apoReadableGlass&&document.body){window.__apoReadableGlass=new MutationObserver(go);window.__apoReadableGlass.observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:['class','style']})}}catch(e){}})();"
               const/4 v2, 0x0
               invoke-virtual {v0, v1, v2}, Landroid/webkit/WebView;->evaluateJavascript(Ljava/lang/String;Landroid/webkit/ValueCallback;)V
               iget v1, p0, Lcom/ric/apopatch/HomeBackgroundInjector;->remaining:I
@@ -211,13 +211,13 @@ jobs:
           java -jar apktool.jar b -a "$AAPT2_LOCAL" decoded -o unsigned.apk
           "$BT/zipalign" -f -p 4 unsigned.apk aligned.apk
           keytool -genkeypair -keystore key.jks -storepass android -keypass android -alias apo -keyalg RSA -keysize 2048 -validity 3650 -dname "CN=APO Glass,O=Ruzakj,C=ID"
-          "$BT/apksigner" sign --ks key.jks --ks-key-alias apo --ks-pass pass:android --key-pass pass:android --out APO-Stage-V6-HIGH-CONTRAST-WAKE.apk aligned.apk
-          "$BT/apksigner" verify --verbose APO-Stage-V6-HIGH-CONTRAST-WAKE.apk | tee -a stage-v-report.txt
-          sha256sum APO-Stage-V6-HIGH-CONTRAST-WAKE.apk | tee -a stage-v-report.txt
+          "$BT/apksigner" sign --ks key.jks --ks-key-alias apo --ks-pass pass:android --key-pass pass:android --out APO-Stage-V7-ALL-MENUS-READABLE.apk aligned.apk
+          "$BT/apksigner" verify --verbose APO-Stage-V7-ALL-MENUS-READABLE.apk | tee -a stage-v-report.txt
+          sha256sum APO-Stage-V7-ALL-MENUS-READABLE.apk | tee -a stage-v-report.txt
 
       - name: Verify
         run: |
-          rm -rf verify; java -jar apktool.jar d -f APO-Stage-V6-HIGH-CONTRAST-WAKE.apk -o verify >/dev/null 2>&1
+          rm -rf verify; java -jar apktool.jar d -f APO-Stage-V7-ALL-MENUS-READABLE.apk -o verify >/dev/null 2>&1
           test -f verify/res/drawable-nodpi/apo_home_bg.png
           grep -R -q 'HomeBackgroundInjector;->apply' verify/smali*/il/ze.smali
           grep -q '__apoReadableGlass' verify/smali/com/ric/apopatch/HomeBackgroundInjector.smali
@@ -226,9 +226,9 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: APO-Stage-V6-HIGH-CONTRAST-WAKE
+          name: APO-Stage-V7-ALL-MENUS-READABLE
           path: |
-            APO-Stage-V6-HIGH-CONTRAST-WAKE.apk
+            APO-Stage-V7-ALL-MENUS-READABLE.apk
             stage-v-report.txt
             notification-patch.txt
           retention-days: 14
